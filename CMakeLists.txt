@@ -46,3 +46,4 @@ endif()
 
 add_subdirectory(direct-call)
 add_subdirectory(app-scope)
+add_subdirectory(domains-attrs)

@@ -1,0 +1,26 @@
+From d500cf0f34229e1363e9d6578fca09261391ea67 Mon Sep 17 00:00:00 2001
+From: Ian Petersen <ispeters@gmail.com>
+Date: Sat, 7 Nov 2026 15:23:33 -0800
+Subject: [PATCH] amend! Forward senders transform_sender leaves as they are
+
+Forward senders transform_sender leaves as they are
+
+default_domain::transform_sender returned a sender it didn't transform
+by value, where [exec.domain.default] returns std::forward<Sndr>(sndr).
+connect passes every sender through transform_sender twice, for the
+domain it completes in and the one it starts in, so each layer of
+connect moved the sender's data twice.
+
+Return such a sender by reference instead. A step that leaves alone a
+new sender an earlier step returned by value still returns it by value,
+since a reference to it would dangle. Whether a transformation changed
+the sender is now judged ignoring references and cv-qualifiers, as
+[exec.snd.transform] does, and so is whether a domain's transformation
+matches default_domain's. get_completion_signatures and get_item_types
+strip the rvalue reference from the transformed type, so senders' static
+get_completion_signatures members see the same Self as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+--
+2.43.0
+

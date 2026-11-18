@@ -1,0 +1,305 @@
+From e57881593ece211bbb647982db232e8d52b73b5b Mon Sep 17 00:00:00 2001
+From: Ian Petersen <ispeters@gmail.com>
+Date: Sat, 7 Nov 2026 15:17:09 -0800
+Subject: [PATCH] Forward senders transform_sender leaves as they are
+
+default_domain::transform_sender returned a sender it didn't transform
+by value, where [exec.domain.default] returns std::forward<Sndr>(sndr).
+connect passes every sender through transform_sender twice, for the
+domain it completes in and the one it starts in, so each layer of
+connect moved the sender's data twice, and a sender that can't be moved
+couldn't be connected as an rvalue.
+
+Return such a sender by reference instead. A step that leaves alone a
+new sender an earlier step returned by value still returns it by value,
+since a reference to it would dangle. Whether a transformation changed
+the sender is now judged ignoring references and cv-qualifiers, as
+[exec.snd.transform] does, and so is whether a domain's transformation
+matches default_domain's. get_completion_signatures and get_item_types
+strip the rvalue reference from the transformed type, so senders' static
+get_completion_signatures members see the same Self as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/exec/sequence_senders.hpp             |  6 +-
+ include/stdexec/__detail/__domain.hpp         | 11 +--
+ .../__detail/__get_completion_signatures.hpp  |  4 +-
+ include/stdexec/__detail/__sequence.hpp       |  2 +-
+ .../stdexec/__detail/__transform_sender.hpp   | 58 +++++++++++++---
+ .../cpos/test_cpo_transform_sender.cpp        | 69 +++++++++++++++++++
+ 6 files changed, 131 insertions(+), 19 deletions(-)
+
+diff --git a/include/exec/sequence_senders.hpp b/include/exec/sequence_senders.hpp
+index 68db5ba..77b904f 100644
+--- a/include/exec/sequence_senders.hpp
++++ b/include/exec/sequence_senders.hpp
+@@ -473,7 +473,8 @@ namespace experimental::execution
+       template <class _Sequence, class _Env>
+       constexpr auto operator()(_Sequence&&, _Env const &) const noexcept
+       {
+-        using __new_sequence_t = transform_sender_result_t<_Sequence, _Env>;
++        using __new_sequence_t =
++          STDEXEC::__remove_rvalue_reference_t<transform_sender_result_t<_Sequence, _Env>>;
+         static_assert(!STDEXEC::__merror<__new_sequence_t>);
+         return __sequence_sndr::__get_item_types_helper<__new_sequence_t, _Env>();
+       }
+@@ -493,7 +494,8 @@ namespace experimental::execution
+   [[nodiscard]]
+   consteval auto get_item_types()
+   {
+-    using __new_sequence_t = STDEXEC::transform_sender_result_t<_Sequence, _Env>;
++    using __new_sequence_t =
++      STDEXEC::__remove_rvalue_reference_t<STDEXEC::transform_sender_result_t<_Sequence, _Env>>;
+     static_assert(!STDEXEC::__merror<__new_sequence_t>);
+     return __sequence_sndr::__get_item_types_helper<__new_sequence_t, _Env>();
+   }
+diff --git a/include/stdexec/__detail/__domain.hpp b/include/stdexec/__detail/__domain.hpp
+index c8f9dad..c735e51 100644
+--- a/include/stdexec/__detail/__domain.hpp
++++ b/include/stdexec/__detail/__domain.hpp
+@@ -86,10 +86,10 @@ namespace STDEXEC
+
+     template <class _OpTag, class _Sender, class _Env>
+     STDEXEC_ATTRIBUTE(always_inline)
+-    constexpr auto transform_sender(_OpTag, _Sender &&__sndr, _Env const &) const
+-      noexcept(__nothrow_move_constructible<_Sender>) -> _Sender
++    constexpr auto transform_sender(_OpTag, _Sender &&__sndr, _Env const &) const noexcept
++      -> _Sender &&
+     {
+-      return static_cast<_Sender>(static_cast<_Sender &&>(__sndr));
++      return static_cast<_Sender &&>(__sndr);
+     }
+
+     template <class _Tag, class... _Args>
+@@ -108,8 +108,9 @@ namespace STDEXEC
+   template <class _Domain, class _OpTag, class _Sndr, class _Env>
+   concept __default_domain_like =
+     (!__detail::__has_transform_sender<_Domain, _OpTag, _Sndr, _Env>)
+-    || __same_as<__detail::__transform_sender_result_t<_Domain, _OpTag, _Sndr, _Env>,
+-                 __detail::__transform_sender_result_t<default_domain, _OpTag, _Sndr, _Env>>;
++    || __same_as<
++      __decay_t<__detail::__transform_sender_result_t<_Domain, _OpTag, _Sndr, _Env>>,
++      __decay_t<__detail::__transform_sender_result_t<default_domain, _OpTag, _Sndr, _Env>>>;
+
+   template <class... _Domains>
+   struct indeterminate_domain
+diff --git a/include/stdexec/__detail/__get_completion_signatures.hpp b/include/stdexec/__detail/__get_completion_signatures.hpp
+index 1f57b75..5108945 100644
+--- a/include/stdexec/__detail/__get_completion_signatures.hpp
++++ b/include/stdexec/__detail/__get_completion_signatures.hpp
+@@ -235,7 +235,7 @@ namespace STDEXEC
+       template <class _Sender, class _Env>
+       constexpr auto operator()(_Sender &&, _Env const &) const noexcept
+       {
+-        using __new_sndr_t = transform_sender_result_t<_Sender, _Env>;
++        using __new_sndr_t = __remove_rvalue_reference_t<transform_sender_result_t<_Sender, _Env>>;
+         static_assert(!__merror<__new_sndr_t>);
+         return __cmplsigs::__get_completion_signatures_helper<__new_sndr_t, _Env>();
+       }
+@@ -338,7 +338,7 @@ namespace STDEXEC
+   template <class _Sender, class _Env>
+   consteval auto get_completion_signatures()
+   {
+-    using __new_sndr_t = transform_sender_result_t<_Sender, _Env>;
++    using __new_sndr_t = __remove_rvalue_reference_t<transform_sender_result_t<_Sender, _Env>>;
+     return __cmplsigs::__get_completion_signatures_helper<__new_sndr_t, _Env>();
+   }
+
+diff --git a/include/stdexec/__detail/__sequence.hpp b/include/stdexec/__detail/__sequence.hpp
+index 5866bef..4df0db2 100644
+--- a/include/stdexec/__detail/__sequence.hpp
++++ b/include/stdexec/__detail/__sequence.hpp
+@@ -453,7 +453,7 @@ namespace STDEXEC
+       template <class _Self>
+       static consteval auto __get_completion_signatures()
+       {
+-        using __sndr_t = transform_sender_result_t<_Self, env<>>;
++        using __sndr_t = __remove_rvalue_reference_t<transform_sender_result_t<_Self, env<>>>;
+         return STDEXEC::get_completion_signatures<__sndr_t>();
+       }
+     };
+diff --git a/include/stdexec/__detail/__transform_sender.hpp b/include/stdexec/__detail/__transform_sender.hpp
+index e1ee231..72870da 100644
+--- a/include/stdexec/__detail/__transform_sender.hpp
++++ b/include/stdexec/__detail/__transform_sender.hpp
+@@ -42,6 +42,36 @@ namespace STDEXEC
+   // [exec.snd.transform]
+   namespace __detail
+   {
++    // A transformation step applied to the result of an earlier one returns a
++    // reference to its argument when it leaves the sender as it is. When the
++    // earlier step returned a new sender by value, that reference would
++    // outlive it, so the step's result is returned by value instead.
++    template <class _Arg, class _Result>
++    using __step_result_t = __if_c<std::is_reference_v<_Arg> || !std::is_reference_v<_Result>,
++                                   _Result,
++                                   __decay_t<_Result>>;
++
++    template <class _Arg, class _Result>
++    inline constexpr bool __nothrow_step_result = std::is_reference_v<_Arg>
++                                               || !std::is_reference_v<_Result>
++                                               || __nothrow_decay_copyable<_Result>;
++
++    template <class _Arg, auto _DeclFn>
++    STDEXEC_ATTRIBUTE(nodiscard, host, device)
++    consteval auto __step_declfn() noexcept
++    {
++      using __result_t = decltype(_DeclFn());
++      if constexpr (__merror<__result_t>)
++      {
++        return _DeclFn;
++      }
++      else
++      {
++        return __declfn<__step_result_t<_Arg, __result_t>,
++                        (noexcept(_DeclFn()) && __nothrow_step_result<_Arg, __result_t>)>();
++      }
++    }
++
+     template <class _Domain, class _OpTag>
+     struct __transform_sender
+     {
+@@ -63,21 +93,24 @@ namespace STDEXEC
+         {
+           return __declfn<__result_t>();
+         }
+-        else if constexpr (__same_as<__result_t, _Sndr>)
++        else if constexpr (__same_as<__decay_t<__result_t>, __decay_t<_Sndr>>)
+         {
+           return __declfn<__result_t, (_Nothrow && __is_nothrow)>();
+         }
+         else if constexpr (__same_as<_OpTag, start_t>)
+         {
+-          return __get_declfn<__result_t, _Env, (_Nothrow && __is_nothrow)>();
++          return __step_declfn<__result_t,
++                               __get_declfn<__result_t, _Env, (_Nothrow && __is_nothrow)>()>();
+         }
+         else
+         {
+           using __transform_recurse_t =
+             __transform_sender<__completing_domain_t<void, __result_t, _Env>, set_value_t>;
+-          return __transform_recurse_t::template __get_declfn<__result_t,
+-                                                              _Env,
+-                                                              (_Nothrow && __is_nothrow)>();
++          return __step_declfn<
++            __result_t,
++            __transform_recurse_t::template __get_declfn<__result_t,
++                                                         _Env,
++                                                         (_Nothrow && __is_nothrow)>()>();
+         }
+       }
+
+@@ -98,7 +131,7 @@ namespace STDEXEC
+         using __domain_t = __domain_for_t<_Sndr, _Env>;
+         using __result_t = __transform_sender_result_t<__domain_t, _OpTag, _Sndr, _Env>;
+
+-        if constexpr (__same_as<__result_t, _Sndr>)
++        if constexpr (__same_as<__decay_t<__result_t>, __decay_t<_Sndr>>)
+         {
+           return __domain_t().transform_sender(_OpTag(), static_cast<_Sndr&&>(__sndr), __env);
+         }
+@@ -127,11 +160,18 @@ namespace STDEXEC
+     template <class _Fn1, class _Fn2>
+     struct __compose
+     {
++      template <class _Sndr, class _Env>
++      using __first_t = __call_result_t<_Fn2, _Sndr, _Env const &>;
++
++      template <class _Sndr, class _Env>
++      using __second_t = __call_result_t<_Fn1, __first_t<_Sndr, _Env>, _Env const &>;
++
+       template <class _Sndr, class _Env>
+       STDEXEC_ATTRIBUTE(nodiscard, host, device, always_inline)
+-      constexpr auto operator()(_Sndr&& __sndr, _Env const & __env) const
+-        noexcept(noexcept(_Fn1()(_Fn2()(static_cast<_Sndr&&>(__sndr), __env), __env)))
+-          -> decltype(_Fn1()(_Fn2()(static_cast<_Sndr&&>(__sndr), __env), __env))
++      constexpr auto operator()(_Sndr&& __sndr, _Env const & __env) const noexcept(
++        noexcept(_Fn1()(_Fn2()(static_cast<_Sndr&&>(__sndr), __env), __env))
++        && __detail::__nothrow_step_result<__first_t<_Sndr, _Env>, __second_t<_Sndr, _Env>>)
++        -> __detail::__step_result_t<__first_t<_Sndr, _Env>, __second_t<_Sndr, _Env>>
+       {
+         return _Fn1()(_Fn2()(static_cast<_Sndr&&>(__sndr), __env), __env);
+       }
+diff --git a/test/stdexec/cpos/test_cpo_transform_sender.cpp b/test/stdexec/cpos/test_cpo_transform_sender.cpp
+index ab332f0..27112a7 100644
+--- a/test/stdexec/cpos/test_cpo_transform_sender.cpp
++++ b/test/stdexec/cpos/test_cpo_transform_sender.cpp
+@@ -90,6 +90,75 @@ namespace
+     }
+   }
+
++  TEST_CASE("transform_sender returns a sender it doesn't transform by reference",
++            "[cpo][cpo_transform_sender]")
++  {
++    STATIC_REQUIRE(
++      std::same_as<decltype(ex::transform_sender(std::declval<just_sender_t>(), ex::env<>{})),
++                   just_sender_t &&>);
++    STATIC_REQUIRE(
++      std::same_as<decltype(ex::transform_sender(std::declval<just_sender_t &>(), ex::env<>{})),
++                   just_sender_t &>);
++    STATIC_REQUIRE(noexcept(ex::transform_sender(std::declval<just_sender_t>(), ex::env<>{})));
++
++    // A sender a domain transforms into a new one is returned by value, even
++    // when the new sender is then left as it is.
++    auto env = ex::prop(ex::get_domain, then_to_just_domain<true>{});
++    STATIC_REQUIRE(std::same_as<decltype(ex::transform_sender(std::declval<then_sender_t>(), env)),
++                                just_sender_t>);
++  }
++
++  //! A sender that counts how often it's moved.
++  struct counted_sender
++  {
++    using sender_concept        = ex::sender_tag;
++    using completion_signatures = ex::completion_signatures<ex::set_value_t()>;
++
++    explicit counted_sender(int &moves) noexcept
++      : moves_(&moves)
++    {}
++
++    counted_sender(counted_sender &&other) noexcept
++      : moves_(other.moves_)
++    {
++      ++*moves_;
++    }
++
++    template <class Receiver>
++    struct operation
++    {
++      Receiver rcvr_;
++
++      void start() & noexcept
++      {
++        ex::set_value(std::move(rcvr_));
++      }
++    };
++
++    template <class Receiver>
++    auto connect(Receiver rcvr) && noexcept -> operation<Receiver>
++    {
++      return {std::move(rcvr)};
++    }
++
++    int *moves_;
++  };
++
++  struct empty_receiver
++  {
++    using receiver_concept = ex::receiver_tag;
++
++    void set_value() noexcept {}
++  };
++
++  TEST_CASE("connect doesn't move a sender it doesn't transform", "[cpo][cpo_transform_sender]")
++  {
++    int  moves = 0;
++    auto op    = ex::connect(counted_sender(moves), empty_receiver{});
++    CHECK(moves == 0);
++    (void) op;
++  }
++
+ #if !STDEXEC_NO_STDCPP_EXCEPTIONS()
+   TEST_CASE("an exception thrown by a transformation propagates out of connect",
+             "[cpo][cpo_transform_sender]")
+--
+2.43.0
+

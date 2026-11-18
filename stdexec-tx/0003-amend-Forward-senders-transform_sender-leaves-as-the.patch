@@ -1,0 +1,33 @@
+From a444adefe07f365b7fc2bf81f097454b10bcdd37 Mon Sep 17 00:00:00 2001
+From: Ian Petersen <ispeters@gmail.com>
+Date: Sat, 7 Nov 2026 15:36:48 -0800
+Subject: [PATCH] amend! Forward senders transform_sender leaves as they are
+
+Forward a sender default_domain doesn't transform instead of moving it
+
+`default_domain::transform_sender` returns a sender it doesn't
+transform by value, where [exec.domain.default] returns
+`std::forward<Sndr>(sndr)`. `connect` passes every sender through
+`transform_sender` twice, once for the domain it completes in and once
+for the one it starts in, so each layer of `connect` moves the sender's
+data twice: connecting `then(then(then(just(c), f), f), f)` moves `c`
+nine times.
+
+This diff returns such a sender by reference instead, so that connecting
+the example moves `c` once. A step that leaves alone a new sender an
+earlier step returned by value still returns it by value, since a
+reference to it would outlive it. Whether a transformation changed the
+sender is now judged ignoring references and cv-qualifiers, as
+[exec.snd.transform] does, and so is whether a domain's transformation
+matches `default_domain`'s. `get_completion_signatures` and
+`get_item_types` strip the rvalue reference from the transformed type,
+so a sender's static `get_completion_signatures` member sees the same
+`Self` as before.
+
+The new tests check that `transform_sender` returns a sender it doesn't
+transform as a reference of the argument's value category without
+throwing, that a sender a domain replaces is returned by value even when
+the replacement is then left alone, and that `connect` doesn't move a
+sender it doesn't transform.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

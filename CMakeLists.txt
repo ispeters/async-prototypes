@@ -35,6 +35,10 @@ if(NOT ASYNC_PROTOTYPES_HAVE_CXX20)
     )
 endif()
 
+# No experiment uses modules. Scanning for them would need clang-scan-deps
+# alongside a non-Apple Clang.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 find_package(Threads REQUIRED)
 
 include(infra/cmake/beman-xfail-compile.cmake)

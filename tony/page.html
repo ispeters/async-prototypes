@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>stdexec under C++29: Tony Tables</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>:root { --bg:#fbfaf7; --fg:#1f1d1a; --muted:#6b665d; --rule:#e2ded5; --code:#f4f2ec; --new:#2f5d50; --old:#7a5a2e; }
+@media (prefers-color-scheme: dark) { :root { --bg:#16171a; --fg:#e7e4dd; --muted:#a29c90; --rule:#2c2e33; --code:#1d1f23; --new:#8fc7b4; --old:#d6b07a; } }
+html { background:var(--bg); color:var(--fg); }
+body { font-family:"Source Serif 4", Georgia, serif; font-size:17px; line-height:1.55; max-width:1500px; margin:0 auto; padding:2.5rem 1.5rem 5rem; }
+h1 { font-size:2rem; font-weight:600; margin:0 0 .4rem; }
+h2 { font-size:1.35rem; font-weight:600; margin:3rem 0 .6rem; padding-top:1rem; border-top:1px solid var(--rule); }
+p, ul { max-width:78ch; }
+.lede { color:var(--muted); font-size:1.1rem; }
+.note { color:var(--muted); font-size:.95rem; }
+code { font-family:"JetBrains Mono", ui-monospace, monospace; font-size:.86em; }
+.tony.one { grid-template-columns:1fr; }
+.tony { display:grid; grid-template-columns:1fr 1fr; gap:0; margin:1.2rem 0; border:1px solid var(--rule); border-radius:6px; overflow:hidden; }
+.tony .col { min-width:0; display:flex; flex-direction:column; }
+.tony .col + .col { border-left:1px solid var(--rule); }
+.tony .hd { font-family:"JetBrains Mono", monospace; font-size:.8rem; font-weight:600; letter-spacing:.04em; padding:.45rem .9rem; border-bottom:1px solid var(--rule); color:var(--old); background:var(--code); }
+.tony .hd.new { color:var(--new); }
+.tony pre { margin:0; flex:1; background:var(--code); overflow-x:auto; }
+.tony pre code.hljs, .tony pre code { display:block; padding:.8rem .9rem; font-size:12.5px; line-height:1.45; background:transparent; }
+.hljs-keyword, .hljs-built_in { color:#8a3b6b; } .hljs-type { color:#2b5e8c; } .hljs-string { color:#3f7a3a; } .hljs-comment { color:var(--muted); font-style:italic; } .hljs-number, .hljs-literal { color:#a3561d; } .hljs-title { color:#5a4ba0; } .hljs-meta { color:#7a6a3a; }
+@media (prefers-color-scheme: dark) { .hljs-keyword, .hljs-built_in { color:#e39ad0; } .hljs-type { color:#8cbbe8; } .hljs-string { color:#9fd38f; } .hljs-number, .hljs-literal { color:#e8a46c; } .hljs-title { color:#b6a8f0; } .hljs-meta { color:#d8c38a; } }
+@media (max-width: 1000px) { .tony { grid-template-columns:1fr; } .tony .col + .col { border-left:0; border-top:1px solid var(--rule); } }
+table.nums { border-collapse:collapse; margin:1rem 0; font-size:.95rem; }
+table.nums th, table.nums td { border-bottom:1px solid var(--rule); padding:.35rem .8rem; text-align:left; vertical-align:top; }
+table.nums td:not(:first-child), table.nums th:not(:first-child) { text-align:center; }
+ol, ul { max-width:78ch; }
+</style></head><body>
+<h1>stdexec under C++29, in Tony Tables</h1>
+<p class="lede">What representative parts of stdexec, and one user's function, could look like in a C++29 with D4471's async functions, D4481's <code>operation_handle</code>, and result destinations decided as 4A. Each section says what its table shows, then shows it.</p>
+
+<h2>Status</h2>
+<ul>
+<li><strong>The C++29 column is a strawman.</strong> D4481 isn't drafted under 4A, so the protocol's names are placeholders chosen here: <code>destination&lt;Sig&gt;()</code>, <code>complete&lt;Sig&gt;()</code>, <code>slot&lt;T&gt;</code>, <code>values&lt;A, B&gt;</code>, <code>continuation</code>, <code>completion_table</code>. The direct-style syntax is D4471R0's (branch <code>d4471r0</code>, commit def2626), plus one spelling D4471 lists as open.</li>
+<li><strong>The C++26 column isn't stdexec's source.</strong> stdexec builds its algorithms from <code>__sexpr</code> machinery that would make a column unreadable, so the algorithms are hand-written to the C++26 protocol, following what stdexec does where it matters (its <code>let_value</code>, for instance, also destroys the first child when it starts the second). Section 1's left column is P4223R2's <code>cache.cpp</code> as published, and section 10's is P4223R2's erased receiver.</li>
+<li><strong>Simplifications shared by both columns:</strong> a child with one value signature (<code>value_of&lt;S&gt;</code> stands for computing it from completion signatures), <code>when_all</code> of two children that doesn't forward its parent's stop token, <code>sync_wait</code> returning <code>optional&lt;V&gt;</code> rather than <code>optional&lt;tuple&lt;V&gt;&gt;</code>, and no attributes or domains.</li>
+<li><strong>What was compiled (observed).</strong> Every table's code is cut verbatim from source files that were compiled and run with GCC 13.3 and Clang 18.1 (the GCC builds under ASan and UBSan): the C++26 column against stdexec <code>main</code> 30acdb0; the C++29 column against a library stand-in for the protocol; the C in section 12 as C11 with <code>-pedantic</code>. The exceptions are section 1's right column, which needs the language feature, and the two P4223R2 excerpts. The tests check values, errors, stopped paths where they exist, an immovable result, and move counts.</li>
+<li><strong>Not shown:</strong> the async stack beyond a bump pointer, arguments in place, tail calls, environments behind erasure, attributes, domains, and the protocol negotiation between C++26 and C++29 senders.</li>
+</ul>
+
+<h2>The C++29 vocabulary</h2>
+<p><code>start</code> and every completion return an <code>operation_handle</code>: the next thing to run, or nothing (D4481). A receiver answers two member templates keyed by a completion signature. <code>destination&lt;Sig&gt;()</code> says where to construct that completion's payload, and <code>complete&lt;Sig&gt;()</code> says the payload has been constructed there. A receiver may also provide a <code>set_value</code> member that takes a value where the sender keeps it, as in C++26; <code>execution::set_value(rcvr, v)</code> calls it if it exists, and otherwise constructs <code>v</code> at the destination and completes. Section 4 explains why that third member is there. All of this is source form, which is what WG21 would standardize.</p>
+<p>When a receiver is erased, its member templates are instantiated once per declared completion into a static table, and the caller's record is one pointer to that table (4A). That's the ABI, which a platform fixes. Section 10 shows it, and sections 11 and 12 show what code compiled against it looks like.</p>
+<p><code>slot&lt;T&gt;</code> is storage for a <code>T</code> that someone else constructs, and it remembers whether it holds one. The design needs a type like it because <code>std::optional</code> can't hand out the address of storage it hasn't constructed into. stdexec has <code>__manual_lifetime</code>, which is the same idea without the flag.</p>
+
+<h2>Corrections to the sample</h2>
+<ul>
+<li><strong>The sample's <code>then</code> was movable, in both columns.</strong> Nesting it inside <code>let_value</code> made libstdc++'s <code>variant::emplace</code> build it in a temporary and move it, leaving its child pointing at the temporary (ASan: stack-use-after-return). Every operation state below now deletes its move constructor, as stdexec's do.</li>
+<li><strong>The sample said <code>when_all</code> is a case only 4A expresses. It isn't.</strong> Its children's values can go straight into the parent's storage under any of 3A, 4A and 5A, because the parent's destination is known when <code>when_all</code> starts. The one place a destination decided at completion looked useful (letting the first failing child claim the parent's error storage) turned out to be unsafe; section 7 says why.</li>
+</ul>
+
+<h2>1. The user's code: <code>cache::get</code></h2>
+<p>P4223R2's caching decorator over a <code>kv_store</code>, as published, beside the same function written as a D4471 body. The declaration is the same in both. Nothing about destinations, tables or handles shows on the right: that choice is between the compiler and the ABI, and someone writing direct-style code never sees it. Section 11 shows what the compiler would make of the right column.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">lookup cache::get(std::string key) const noexcept {
+  return lookup(
+      *this, std::move(key), [](cache const&amp; self, std::string key) noexcept {
+        return ex::just(std::move(key)) |
+               ex::let_value([&amp;self](std::string const&amp; key) {
+                 auto miss = [&amp;] {
+                   return self.backing_-&gt;get(key) |
+                          ex::then([&amp;self, &amp;key](
+                                       std::optional&lt;std::string&gt; value) noexcept {
+                            if (value) {
+                              try {
+                                self.entries_.insert(key, *value);
+                              } catch (...) {
+                                // caching is best-effort; the lookup succeeds
+                              }
+                            }
+                            return value;
+                          });
+                 };
+                 using result = exec::variant_sender&lt;
+                     decltype(ex::just(std::optional&lt;std::string&gt;())),
+                     decltype(miss())&gt;;
+                 // a hit copies the value and a miss copies the key, so either
+                 // can throw
+                 if (auto value = self.entries_.find(key)) {
+                   return result(ex::just(std::move(value)));
+                 }
+                 return result(miss());
+               }) |
+               report_errors_as_error_codes();
+      });
+}</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">lookup cache::get(std::string key) const noexcept {
+  try {
+    if (auto value = entries_.find(key)) {
+      co_return value;
+    }
+    auto value = co_await backing_-&gt;get(key);
+    if (value) {
+      try {
+        entries_.insert(key, *value);
+      } catch (...) {
+        // caching is best-effort; the lookup succeeds
+      }
+    }
+    co_return value;
+  } catch (std::error_code ec) {  // the backing store&#x27;s error: pass it on
+    co_return with_error(ec);
+  } catch (...) {                 // a copy threw
+    co_return with_error(error_code_from(std::current_exception()));
+  }
+}</code></pre></div></div>
+<p class="note">Two things on the right are still open in D4471. <code>with_error</code> is P4282R2's spelling, one of the candidates D4471 lists for completing with a chosen error. And the <code>catch (std::error_code)</code> handler is needed because, under D4471's rule, <code>catch (...)</code> would otherwise be entered by the backing store's <code>set_error(error_code)</code>, and what <code>current_exception()</code> returns there is undecided.</p>
+
+<h2>2. A leaf that completes inline: <code>just</code></h2>
+<p>The smallest sender. The only change is that <code>start</code> returns what the receiver says runs next. <code>execution::set_value(rcvr, std::move(value))</code> now does one of two things. If the receiver can use the value where <code>just</code> keeps it, it is passed by reference, as in C++26. Otherwise it is constructed at the receiver's destination. Section 4 is about that choice.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">template &lt;class T&gt;
+struct just_sender {
+  using sender_concept = sender_t;
+  using completion_signatures =
+      execution::completion_signatures&lt;set_value_t(T)&gt;;
+
+  template &lt;class R&gt;
+  struct op {
+    using operation_state_concept = operation_state_t;
+    R rcvr;
+    T value;
+
+    void start() &amp; noexcept {
+      execution::set_value(std::move(rcvr), std::move(value));
+    }
+  };
+
+  T value;
+
+  template &lt;class R&gt;
+  op&lt;R&gt; connect(R rcvr) &amp;&amp; {
+    return {std::move(rcvr), std::move(value)};
+  }
+};</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">template &lt;class T&gt;
+struct just_sender {
+  using sender_concept = sender_t;
+  using completion_signatures =
+      execution::completion_signatures&lt;set_value_t(T)&gt;;
+
+  template &lt;class R&gt;
+  struct op {
+    using operation_state_concept = operation_state_t;
+    R rcvr;
+    T value;
+
+    operation_handle start() &amp; noexcept {
+      return execution::set_value(rcvr, std::move(value));
+    }
+  };
+
+  T value;
+
+  template &lt;class R&gt;
+  op&lt;R&gt; connect(R rcvr) &amp;&amp; {
+    return {std::move(rcvr), std::move(value)};
+  }
+};</code></pre></div></div>
+<p class="note">A leaf that creates its value instead of holding one (a parse, a read into a fresh buffer) would construct it at <code>rcvr.template destination&lt;set_value_t(T)&gt;()</code> and return <code>rcvr.template complete&lt;set_value_t(T)&gt;()</code>. The left column of section 4 spells that form out.</p>
+
+<h2>3. A middle that filters one completion and passes the rest: <code>then</code></h2>
+<p>This is Robert Leahy's case in its most common form. <code>then</code> consumes its child's value, because it needs it to call <code>f</code>, and passes errors and stopped through untouched. On the left the split is spread across three completion members. On the right, each of the two member templates has one <code>if constexpr</code>. For the value, <code>then</code> answers with storage of its own. For everything else it answers with its parent's answer, so a child's error is constructed directly wherever the top of the chain keeps it. The <code>set_value</code> member takes the value where the child keeps it, when the child offers that. Either way, <code>f</code>'s result is constructed in the parent's storage.</p>
+<p>The C++26 column handles any number of value signatures through its variadic <code>set_value</code>. The C++29 column needs storage per value signature, which would be a <code>slot</code> per signature, or a union of them.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">template &lt;class Child, class F, class R&gt;
+struct then_op {
+  using operation_state_concept = operation_state_t;
+
+  struct rcvr_t {
+    using receiver_concept = receiver_t;
+    then_op* op;
+
+    template &lt;class... Vs&gt;
+    void set_value(Vs&amp;&amp;... vs) &amp;&amp; noexcept {
+      try {
+        execution::set_value(
+            std::move(op-&gt;rcvr),
+            std::invoke(std::move(op-&gt;f), std::forward&lt;Vs&gt;(vs)...));
+      } catch (...) {
+        execution::set_error(std::move(op-&gt;rcvr),
+                             std::current_exception());
+      }
+    }
+
+    template &lt;class E&gt;
+    void set_error(E&amp;&amp; e) &amp;&amp; noexcept {
+      execution::set_error(std::move(op-&gt;rcvr), std::forward&lt;E&gt;(e));
+    }
+
+    void set_stopped() &amp;&amp; noexcept {
+      execution::set_stopped(std::move(op-&gt;rcvr));
+    }
+
+    env_of_t&lt;R&gt; get_env() const noexcept {
+      return execution::get_env(op-&gt;rcvr);
+    }
+  };
+
+  F f;
+  R rcvr;
+  connect_result_t&lt;Child, rcvr_t&gt; child;
+
+  then_op(Child&amp;&amp; c, F fn, R r)
+      : f(std::move(fn)), rcvr(std::move(r)),
+        child(execution::connect(std::move(c), rcvr_t{this})) {}
+  then_op(then_op&amp;&amp;) = delete;
+
+  void start() &amp; noexcept { execution::start(child); }
+};</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">template &lt;class Child, class F, class R&gt;
+struct then_op {
+  using operation_state_concept = operation_state_t;
+  using V = value_of&lt;Child&gt;;
+  using U = std::invoke_result_t&lt;F, V&gt;;
+
+  struct rcvr_t {
+    using receiver_concept = receiver_t;
+    then_op* op;
+
+    // the child&#x27;s value, where the child keeps it
+    operation_handle set_value(V&amp;&amp; v) noexcept {
+      return op-&gt;invoke(std::move(v), false);
+    }
+
+    template &lt;class Sig&gt;
+    void* destination() noexcept {
+      if constexpr (same_as&lt;Sig, set_value_t(V)&gt;) {
+        return op-&gt;value.address();  // filtered: then needs it
+      } else {
+        return op-&gt;rcvr.template destination&lt;Sig&gt;();  // passed through
+      }
+    }
+
+    template &lt;class Sig&gt;
+    operation_handle complete() noexcept {
+      if constexpr (same_as&lt;Sig, set_value_t(V)&gt;) {
+        return op-&gt;invoke(std::move(op-&gt;value.adopt()), true);
+      } else {
+        return op-&gt;rcvr.template complete&lt;Sig&gt;();
+      }
+    }
+
+    env_of_t&lt;R&gt; get_env() const noexcept {
+      return execution::get_env(op-&gt;rcvr);
+    }
+  };
+
+  F f;
+  R rcvr;
+  slot&lt;V&gt; value;  // the child constructs its value here
+  connect_result_t&lt;Child, rcvr_t&gt; child;
+
+  then_op(Child&amp;&amp; c, F fn, R r)
+      : f(std::move(fn)), rcvr(std::move(r)),
+        child(execution::connect(std::move(c), rcvr_t{this})) {}
+  then_op(then_op&amp;&amp;) = delete;
+
+  operation_handle start() &amp; noexcept { return execution::start(child); }
+
+  operation_handle invoke(V&amp;&amp; v, bool ours) noexcept {
+    bool ok = true;
+    try {
+      ::new (rcvr.template destination&lt;set_value_t(U)&gt;())
+          U(std::invoke(std::move(f), std::move(v)));
+    } catch (...) {
+      ::new (rcvr.template destination&lt;set_error_t(exception_ptr)&gt;())
+          exception_ptr(std::current_exception());
+      ok = false;
+    }
+    if (ours) {
+      value.reset();  // before completing: the parent may destroy *this
+    }
+    return ok ? rcvr.template complete&lt;set_value_t(U)&gt;()
+              : rcvr.template complete&lt;set_error_t(exception_ptr)&gt;();
+  }
+};</code></pre></div></div>
+<ul>
+<li><strong>An immovable result now works (observed).</strong> With <code>f</code> returning a type whose move constructor is deleted, the C++26 column fails to compile in stdexec's <code>sync_wait</code> (a static assertion, then no matching <code>emplace</code>), because the value arrives as an argument and has to be stored. The C++29 column constructs it in the root's storage.</li>
+<li><strong>Nothing of <code>then</code>'s is touched after it completes its parent.</strong> That rule is C++26's too. What's new is that destroying the child's value is <code>then</code>'s job, and it has to happen before <code>complete</code>, which is why <code>invoke</code> resets the slot first.</li>
+</ul>
+
+<h2>4. Your question: may <code>just</code> call <code>set_value</code> instead?</h2>
+<p>Yes, and it should. In the sample, <code>just(x) | then(f)</code> cost one more move than in C++26, because <code>just</code> constructed its value in <code>then</code>'s storage, where C++26 handed <code>f</code> a reference into <code>just</code>'s operation state. Letting the sender choose <code>set_value</code> gets that move back. The table compares the two C++29 forms of <code>just</code>; the <code>set_value</code> member that receives the reference is <code>then</code>'s, in section 3.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++29, constructing in place</div><pre><code class="language-cpp">template &lt;class T&gt;
+struct just_in_place {
+  // ...
+  template &lt;class R&gt;
+  struct op {
+    using operation_state_concept = operation_state_t;
+    R rcvr;
+    T value;
+
+    operation_handle start() &amp; noexcept {
+      ::new (rcvr.template destination&lt;set_value_t(T)&gt;()) T(std::move(value));
+      return rcvr.template complete&lt;set_value_t(T)&gt;();
+    }
+  };
+  // ...</code></pre></div><div class="col"><div class="hd new">C++29, choosing set_value</div><pre><code class="language-cpp">template &lt;class T&gt;
+struct just_sender {
+  using sender_concept = sender_t;
+  using completion_signatures =
+      execution::completion_signatures&lt;set_value_t(T)&gt;;
+
+  template &lt;class R&gt;
+  struct op {
+    using operation_state_concept = operation_state_t;
+    R rcvr;
+    T value;
+
+    operation_handle start() &amp; noexcept {
+      return execution::set_value(rcvr, std::move(value));
+    }
+  };
+
+  T value;
+
+  template &lt;class R&gt;
+  op&lt;R&gt; connect(R rcvr) &amp;&amp; {
+    return {std::move(rcvr), std::move(value)};
+  }
+};</code></pre></div></div>
+<p>Moves counted from the sender's construction to the result, including <code>connect</code>'s, which are the same in every column (observed):</p>
+<table class="nums">
+<tr><th>Expression</th><th>C++26</th><th>C++29, <code>just</code> constructs in place</th><th>C++29, <code>just</code> calls <code>set_value</code></th></tr>
+<tr><td><code>sync_wait(then(just(x), f))</code></td><td>1</td><td>2</td><td>1</td></tr>
+<tr><td><code>sync_wait(just(x))</code></td><td>3</td><td>3</td><td>3</td></tr>
+<tr><td><code>sync_wait(let_value(just(x), …just(y)))</code></td><td>6</td><td>–</td><td>6</td></tr>
+<tr><td><code>sync_wait(then(when_all(just(x), just(y)), f))</code></td><td>4</td><td>–</td><td>4</td></tr>
+<tr><td><code>sync_wait(then(just(1), make))</code>, <code>make</code> creating the value</td><td>2</td><td>–</td><td>1</td></tr>
+<tr><td><code>sync_wait(let_value(just(1), …then(just(2), make)))</code></td><td>2</td><td>–</td><td>1</td></tr>
+<tr><td><code>sync_wait(then(when_all(then(…, make), then(…, make)), f))</code></td><td>2</td><td>–</td><td>0</td></tr>
+</table>
+<p>So the rule that falls out is simple. A sender whose value already exists and outlives the call offers it by reference with <code>set_value</code>. A sender that creates its value constructs it at the destination. The <code>set_value</code> form never cost more moves than C++26 here, and creating values is where the design saves.</p>
+<p>Why the choice belongs to the sender, and what it costs, ranked:</p>
+<ol>
+<li><strong>Only the sender knows whether the value already exists.</strong> The receiver knows only whether it needs storage. With <code>execution::set_value</code> defaulting to construct-and-complete, a receiver that has no use for a reference writes nothing extra, so offering a reference never costs a receiver anything.</li>
+<li><strong>A receiver that takes the reference must finish with it before completing its own parent.</strong> That's C++26's rule, since the child is still alive underneath the call. It holds for <code>then</code>. It also means a receiver can't destroy the child while it holds the reference, which only matters to an algorithm that wants to release children as they complete.</li>
+<li><strong>Pass-through layers should forward <code>set_value</code>, as <code>write_env</code> and <code>let_value</code>'s second receiver do below.</strong> One that doesn't still works: the default constructs at its destination, which is its parent's. It only loses the reference.</li>
+<li><strong>Across erasure the reference is lost unless the ABI carries it.</strong> Section 10's erased receiver has no <code>set_value</code>, so a <code>just</code> behind a <code>function</code> constructs into the caller's destination. A table could gain one by-reference entry per value signature, at the cost of a bigger table and an ABI with two ways to deliver a value. I'd leave it out until a measurement shows it matters, since behind an erased call the caller usually needs storage anyway.</li>
+</ol>
+<p class="note">This supersedes the idea the sample raised, a leaf declaring <code>set_value_t(T&amp;&amp;)</code>, which would have changed the declared completions to get the same effect.</p>
+
+<h2>5. A middle that passes everything through: <code>write_env</code></h2>
+<p>The common case. Every completion goes to the parent unchanged, and only the environment differs. On the left that means three forwarding members; on the right, three forwarding members of a different kind. Neither column needs any storage, and on the right every payload is constructed directly in whatever storage the nearest ancestor that filters provides. The environment line is the same in both columns.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">template &lt;class Child, class Env, class R&gt;
+struct write_env_op {
+  using operation_state_concept = operation_state_t;
+
+  struct rcvr_t {
+    using receiver_concept = receiver_t;
+    write_env_op* op;
+
+    template &lt;class... Vs&gt;
+    void set_value(Vs&amp;&amp;... vs) &amp;&amp; noexcept {
+      execution::set_value(std::move(op-&gt;rcvr), std::forward&lt;Vs&gt;(vs)...);
+    }
+
+    template &lt;class E&gt;
+    void set_error(E&amp;&amp; e) &amp;&amp; noexcept {
+      execution::set_error(std::move(op-&gt;rcvr), std::forward&lt;E&gt;(e));
+    }
+
+    void set_stopped() &amp;&amp; noexcept {
+      execution::set_stopped(std::move(op-&gt;rcvr));
+    }
+
+    env&lt;Env, env_of_t&lt;R&gt;&gt; get_env() const noexcept {
+      return {op-&gt;own_env, execution::get_env(op-&gt;rcvr)};
+    }
+  };
+
+  Env own_env;
+  R rcvr;
+  connect_result_t&lt;Child, rcvr_t&gt; child;
+
+  write_env_op(Child&amp;&amp; c, Env e, R r)
+      : own_env(std::move(e)), rcvr(std::move(r)),
+        child(execution::connect(std::move(c), rcvr_t{this})) {}
+  write_env_op(write_env_op&amp;&amp;) = delete;
+
+  void start() &amp; noexcept { execution::start(child); }
+};</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">template &lt;class Child, class Env, class R&gt;
+struct write_env_op {
+  using operation_state_concept = operation_state_t;
+
+  struct rcvr_t {
+    using receiver_concept = receiver_t;
+    write_env_op* op;
+
+    template &lt;class A&gt;
+    operation_handle set_value(A&amp;&amp; a) noexcept {
+      return execution::set_value(op-&gt;rcvr, std::forward&lt;A&gt;(a));
+    }
+
+    template &lt;class Sig&gt;
+    void* destination() noexcept {
+      return op-&gt;rcvr.template destination&lt;Sig&gt;();
+    }
+
+    template &lt;class Sig&gt;
+    operation_handle complete() noexcept {
+      return op-&gt;rcvr.template complete&lt;Sig&gt;();
+    }
+
+    env&lt;Env, env_of_t&lt;R&gt;&gt; get_env() const noexcept {
+      return {op-&gt;own_env, execution::get_env(op-&gt;rcvr)};
+    }
+  };
+
+  Env own_env;
+  R rcvr;
+  connect_result_t&lt;Child, rcvr_t&gt; child;
+
+  write_env_op(Child&amp;&amp; c, Env e, R r)
+      : own_env(std::move(e)), rcvr(std::move(r)),
+        child(execution::connect(std::move(c), rcvr_t{this})) {}
+  write_env_op(write_env_op&amp;&amp;) = delete;
+
+  operation_handle start() &amp; noexcept { return execution::start(child); }
+};</code></pre></div></div>
+<h2>6. Storage that outlives a child: <code>let_value</code></h2>
+<p><code>let_value</code> keeps its first child's value for as long as the second child runs, because <code>f</code> receives it by reference and the second sender may borrow it. Both columns destroy the first child when they start the second, as stdexec does: <code>variant::emplace</code> does it, while the first child is still inside its completion call, which is safe only because the child touches nothing afterwards.</p>
+<p>Two things differ. On the left the first child's value arrives as an argument and is moved into an <code>optional</code>. On the right the child constructs it in <code>let_value</code>'s slot, or, if the child chose <code>set_value</code>, the default does the same. And everything the second child produces passes straight through to the parent's storage, where the left column hands each value up as an argument for someone further up to store. With <code>just</code> on both sides the two columns make the same number of moves; with a second child that creates its value, the right makes one fewer (section 4).</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">template &lt;class Child, class F, class R&gt;
+struct let_value_op {
+  using operation_state_concept = operation_state_t;
+  using V = value_of&lt;Child&gt;;
+  using Second = std::invoke_result_t&lt;F, V&amp;&gt;;
+
+  struct rcvr1_t {  // the first child&#x27;s
+    using receiver_concept = receiver_t;
+    let_value_op* op;
+
+    template &lt;class A&gt;
+    void set_value(A&amp;&amp; a) &amp;&amp; noexcept {
+      op-&gt;next(std::forward&lt;A&gt;(a));
+    }
+
+    template &lt;class E&gt;
+    void set_error(E&amp;&amp; e) &amp;&amp; noexcept {
+      execution::set_error(std::move(op-&gt;rcvr), std::forward&lt;E&gt;(e));
+    }
+
+    void set_stopped() &amp;&amp; noexcept {
+      execution::set_stopped(std::move(op-&gt;rcvr));
+    }
+
+    env_of_t&lt;R&gt; get_env() const noexcept {
+      return execution::get_env(op-&gt;rcvr);
+    }
+  };
+
+  struct rcvr2_t {  // the second child&#x27;s: everything passes through
+    using receiver_concept = receiver_t;
+    let_value_op* op;
+
+    template &lt;class... Vs&gt;
+    void set_value(Vs&amp;&amp;... vs) &amp;&amp; noexcept {
+      execution::set_value(std::move(op-&gt;rcvr), std::forward&lt;Vs&gt;(vs)...);
+    }
+
+    template &lt;class E&gt;
+    void set_error(E&amp;&amp; e) &amp;&amp; noexcept {
+      execution::set_error(std::move(op-&gt;rcvr), std::forward&lt;E&gt;(e));
+    }
+
+    void set_stopped() &amp;&amp; noexcept {
+      execution::set_stopped(std::move(op-&gt;rcvr));
+    }
+
+    env_of_t&lt;R&gt; get_env() const noexcept {
+      return execution::get_env(op-&gt;rcvr);
+    }
+  };
+
+  F f;
+  R rcvr;
+  std::optional&lt;V&gt; value;  // outlives the second child, which may borrow it
+  std::variant&lt;connect_result_t&lt;Child, rcvr1_t&gt;,
+               connect_result_t&lt;Second, rcvr2_t&gt;&gt;
+      ops;
+
+  let_value_op(Child&amp;&amp; c, F fn, R r)
+      : f(std::move(fn)), rcvr(std::move(r)),
+        ops(std::in_place_index&lt;0&gt;, emplace_from{[&amp;] {
+              return execution::connect(std::move(c), rcvr1_t{this});
+            }}) {}
+  let_value_op(let_value_op&amp;&amp;) = delete;
+
+  void start() &amp; noexcept { execution::start(std::get&lt;0&gt;(ops)); }
+
+  template &lt;class A&gt;
+  void next(A&amp;&amp; a) noexcept {
+    try {
+      value.emplace(std::forward&lt;A&gt;(a));  // a may refer into the first child
+      auto&amp; second = ops.template emplace&lt;1&gt;(emplace_from{[&amp;] {
+        return execution::connect(std::invoke(std::move(f), *value),
+                                  rcvr2_t{this});
+      }});  // destroys the first child
+      execution::start(second);
+    } catch (...) {
+      execution::set_error(std::move(rcvr), std::current_exception());
+    }
+  }
+};</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">template &lt;class Child, class F, class R&gt;
+struct let_value_op {
+  using operation_state_concept = operation_state_t;
+  using V = value_of&lt;Child&gt;;
+  using Second = std::invoke_result_t&lt;F, V&amp;&gt;;
+
+  struct rcvr1_t {  // the first child&#x27;s
+    using receiver_concept = receiver_t;
+    let_value_op* op;
+
+    template &lt;class Sig&gt;
+    void* destination() noexcept {
+      if constexpr (same_as&lt;Sig, set_value_t(V)&gt;) {
+        return op-&gt;value.address();  // kept: the second child may borrow it
+      } else {
+        return op-&gt;rcvr.template destination&lt;Sig&gt;();
+      }
+    }
+
+    template &lt;class Sig&gt;
+    operation_handle complete() noexcept {
+      if constexpr (same_as&lt;Sig, set_value_t(V)&gt;) {
+        op-&gt;value.adopt();
+        return op-&gt;next();
+      } else {
+        return op-&gt;rcvr.template complete&lt;Sig&gt;();
+      }
+    }
+
+    env_of_t&lt;R&gt; get_env() const noexcept {
+      return execution::get_env(op-&gt;rcvr);
+    }
+  };
+
+  struct rcvr2_t {  // the second child&#x27;s: everything passes through
+    using receiver_concept = receiver_t;
+    let_value_op* op;
+
+    template &lt;class A&gt;
+    operation_handle set_value(A&amp;&amp; a) noexcept {
+      return execution::set_value(op-&gt;rcvr, std::forward&lt;A&gt;(a));
+    }
+
+    template &lt;class Sig&gt;
+    void* destination() noexcept {
+      return op-&gt;rcvr.template destination&lt;Sig&gt;();
+    }
+
+    template &lt;class Sig&gt;
+    operation_handle complete() noexcept {
+      return op-&gt;rcvr.template complete&lt;Sig&gt;();
+    }
+
+    env_of_t&lt;R&gt; get_env() const noexcept {
+      return execution::get_env(op-&gt;rcvr);
+    }
+  };
+
+  F f;
+  R rcvr;
+  slot&lt;V&gt; value;  // outlives the second child, which may borrow it
+  std::variant&lt;connect_result_t&lt;Child, rcvr1_t&gt;,
+               connect_result_t&lt;Second, rcvr2_t&gt;&gt;
+      ops;
+
+  let_value_op(Child&amp;&amp; c, F fn, R r)
+      : f(std::move(fn)), rcvr(std::move(r)),
+        ops(std::in_place_index&lt;0&gt;, emplace_from{[&amp;] {
+              return execution::connect(std::move(c), rcvr1_t{this});
+            }}) {}
+  let_value_op(let_value_op&amp;&amp;) = delete;
+
+  operation_handle start() &amp; noexcept {
+    return execution::start(std::get&lt;0&gt;(ops));
+  }
+
+  operation_handle next() noexcept {
+    try {
+      auto&amp; second = ops.template emplace&lt;1&gt;(emplace_from{[&amp;] {
+        return execution::connect(std::invoke(std::move(f), *value),
+                                  rcvr2_t{this});
+      }});  // destroys the first child
+      return execution::start(second);
+    } catch (...) {
+      ::new (rcvr.template destination&lt;set_error_t(exception_ptr)&gt;())
+          exception_ptr(std::current_exception());
+      return rcvr.template complete&lt;set_error_t(exception_ptr)&gt;();
+    }
+  }
+};</code></pre></div></div>
+<p class="note">The slot must be declared before the variant, so that it is destroyed after the second child, which may still borrow from it. In the left column, the <code>optional</code> is in the same position for the same reason.</p>
+
+<h2>7. Several children at once: <code>when_all</code></h2>
+<p>The fork. On the left each child's value arrives as an argument, is moved into an <code>optional</code> in <code>when_all</code>, and is handed on by reference when <code>when_all</code> completes, for its parent to move again if it stores it. On the right, <code>when_all</code> asks its parent once, at <code>start</code>, where the pair of values goes. It then gives each child the address of its own element, so every value is constructed in its final place. A child whose value is created fresh (a <code>then</code>, say) costs no moves at all, against one per child on the left (section 4's last row), and a parent that stores the pair would move each value once more on the left only.</p>
+<p>Errors are different, and this is the one place the right column stages a payload and moves it. Both children can fail at the same time, so each gets an error slot of its own, and the winner is moved to the parent at the end. The right column also loses the left's <code>try</code>/<code>catch</code>: a value whose construction throws is the child's failure, reported as the child's error, not <code>when_all</code>'s.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">template &lt;class S1, class S2, class R&gt;
+struct when_all_op {
+  using operation_state_concept = operation_state_t;
+  using V1 = value_of&lt;S1&gt;;
+  using V2 = value_of&lt;S2&gt;;
+  enum : int { none, error, stopped };
+
+  template &lt;int I&gt;
+  struct rcvr_t {
+    using receiver_concept = receiver_t;
+    when_all_op* op;
+
+    template &lt;class A&gt;
+    void set_value(A&amp;&amp; a) &amp;&amp; noexcept {
+      try {
+        std::get&lt;I&gt;(op-&gt;results).emplace(std::forward&lt;A&gt;(a));
+      } catch (...) {
+        op-&gt;fail(std::current_exception());
+      }
+      op-&gt;arrive();
+    }
+
+    void set_error(exception_ptr e) &amp;&amp; noexcept {
+      op-&gt;fail(std::move(e));
+      op-&gt;arrive();
+    }
+
+    void set_stopped() &amp;&amp; noexcept {
+      op-&gt;stop();
+      op-&gt;arrive();
+    }
+
+    prop&lt;get_stop_token_t, inplace_stop_token&gt; get_env() const noexcept {
+      return {get_stop_token, op-&gt;stop_source.get_token()};
+    }
+  };
+
+  R rcvr;
+  std::tuple&lt;std::optional&lt;V1&gt;, std::optional&lt;V2&gt;&gt; results;
+  exception_ptr first_error;
+  std::atomic&lt;int&gt; state{none};
+  std::atomic&lt;int&gt; count{2};
+  inplace_stop_source stop_source;
+  connect_result_t&lt;S1, rcvr_t&lt;0&gt;&gt; child1;
+  connect_result_t&lt;S2, rcvr_t&lt;1&gt;&gt; child2;
+
+  when_all_op(S1&amp;&amp; s1, S2&amp;&amp; s2, R r)
+      : rcvr(std::move(r)),
+        child1(execution::connect(std::move(s1), rcvr_t&lt;0&gt;{this})),
+        child2(execution::connect(std::move(s2), rcvr_t&lt;1&gt;{this})) {}
+
+  void start() &amp; noexcept {
+    execution::start(child1);
+    execution::start(child2);
+  }
+
+  void fail(exception_ptr e) noexcept {
+    if (state.exchange(error) != error) {
+      first_error = std::move(e);
+    }
+    stop_source.request_stop();
+  }
+
+  void stop() noexcept {
+    int expected = none;
+    state.compare_exchange_strong(expected, stopped);
+    stop_source.request_stop();
+  }
+
+  void arrive() noexcept {
+    if (count.fetch_sub(1, std::memory_order_acq_rel) != 1) {
+      return;
+    }
+    switch (state.load()) {
+      case none:
+        execution::set_value(std::move(rcvr),
+                             std::move(*std::get&lt;0&gt;(results)),
+                             std::move(*std::get&lt;1&gt;(results)));
+        break;
+      case error:
+        execution::set_error(std::move(rcvr), std::move(first_error));
+        break;
+      default:
+        execution::set_stopped(std::move(rcvr));
+    }
+  }
+};</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">template &lt;class S1, class S2, class R&gt;
+struct when_all_op {
+  using operation_state_concept = operation_state_t;
+  using V1 = value_of&lt;S1&gt;;
+  using V2 = value_of&lt;S2&gt;;
+  using Vs = values&lt;V1, V2&gt;;  // D4471&#x27;s unnamed aggregate
+  enum : int { none, error, stopped };
+
+  template &lt;int I&gt;
+  struct rcvr_t {
+    using receiver_concept = receiver_t;
+    when_all_op* op;
+
+    template &lt;class Sig&gt;
+    void* destination() noexcept {
+      if constexpr (same_as&lt;Sig, set_error_t(exception_ptr)&gt;) {
+        return op-&gt;errors[I].address();  // staged: both may fail at once
+      } else if constexpr (I == 0) {
+        return &amp;op-&gt;results-&gt;first;  // straight into our parent&#x27;s storage
+      } else {
+        return &amp;op-&gt;results-&gt;second;
+      }
+    }
+
+    template &lt;class Sig&gt;
+    operation_handle complete() noexcept {
+      if constexpr (same_as&lt;Sig, set_error_t(exception_ptr)&gt;) {
+        op-&gt;errors[I].adopt();
+        op-&gt;fail(I);
+      } else if constexpr (same_as&lt;Sig, set_stopped_t()&gt;) {
+        op-&gt;stop();
+      } else {
+        op-&gt;constructed[I] = true;
+      }
+      return op-&gt;arrive();
+    }
+
+    prop&lt;get_stop_token_t, inplace_stop_token&gt; get_env() const noexcept {
+      return {get_stop_token, op-&gt;stop_source.get_token()};
+    }
+  };
+
+  R rcvr;
+  Vs* results = nullptr;  // in our parent&#x27;s storage
+  bool constructed[2] = {};
+  slot&lt;exception_ptr&gt; errors[2];
+  int failed = -1;
+  std::atomic&lt;int&gt; state{none};
+  std::atomic&lt;int&gt; count{2};
+  inplace_stop_source stop_source;
+  connect_result_t&lt;S1, rcvr_t&lt;0&gt;&gt; child1;
+  connect_result_t&lt;S2, rcvr_t&lt;1&gt;&gt; child2;
+
+  when_all_op(S1&amp;&amp; s1, S2&amp;&amp; s2, R r)
+      : rcvr(std::move(r)),
+        child1(execution::connect(std::move(s1), rcvr_t&lt;0&gt;{this})),
+        child2(execution::connect(std::move(s2), rcvr_t&lt;1&gt;{this})) {}
+
+  operation_handle start() &amp; noexcept {
+    // asked once, up front; each child gets its element
+    results = ::new (rcvr.template destination&lt;set_value_t(Vs)&gt;()) Vs;
+    execution::run(execution::start(child1));  // a fork: run what it hands back
+    return execution::start(child2);
+  }
+
+  void fail(int i) noexcept {
+    if (state.exchange(error) != error) {
+      failed = i;
+    }
+    stop_source.request_stop();
+  }
+
+  void stop() noexcept {
+    int expected = none;
+    state.compare_exchange_strong(expected, stopped);
+    stop_source.request_stop();
+  }
+
+  operation_handle arrive() noexcept {
+    if (count.fetch_sub(1, std::memory_order_acq_rel) != 1) {
+      return {};
+    }
+    if (state.load() == none) {
+      return rcvr.template complete&lt;set_value_t(Vs)&gt;();
+    }
+    if (constructed[0]) results-&gt;first.~V1();  // abandon the results
+    if (constructed[1]) results-&gt;second.~V2();
+    if (state.load() == stopped) {
+      return rcvr.template complete&lt;set_stopped_t()&gt;();
+    }
+    ::new (rcvr.template destination&lt;set_error_t(exception_ptr)&gt;())
+        exception_ptr(std::move(*errors[failed]));
+    return rcvr.template complete&lt;set_error_t(exception_ptr)&gt;();
+  }
+};</code></pre></div></div>
+<p>This table needs four protocol rules that the simpler algorithms never touched. Each is a question for D4481:</p>
+<ol>
+<li><strong>A sender may ask for a destination before it knows how it will complete, and abandon it.</strong> <code>when_all</code> asks for the value destination at <code>start</code>, and on error or stopped it destroys what its children constructed there and completes some other way. The rule needed: a sender may hold several destinations but have live objects in only one at a time, and must destroy them before constructing in another. Without that, a parent couldn't put its value and error storage in one union, and every parent does.</li>
+<li><strong>The value aggregate has to be constructible one element at a time.</strong> <code>values&lt;A, B&gt;</code> stands in for D4471's unnamed aggregate, and the stand-in builds its elements in anonymous unions to make that legal. No C++ class with non-trivial members allows it. If the aggregate is compiler-defined, the language could grant it; if it is a library <code>tuple</code>, it can't.</li>
+<li><strong>Why a destination decided at completion doesn't help here.</strong> The tempting design lets the first failing child claim the parent's error storage, which only 4A can express. It's unsafe: the error storage may share a union with the value elements another child is constructing at that moment.</li>
+<li><strong>Starting two children means running what the first hands back.</strong> <code>start</code> returns one handle, so the first child's has to be run in place (<code>execution::run</code>) before the second starts. The nesting is bounded: the first child's chain ends in <code>when_all</code>'s <code>arrive</code>, which returns nothing because the second child hasn't finished.</li>
+</ol>
+<p class="note">The C++29 column keys the value destination as <code>set_value_t(Vs)</code>, the aggregate. A real signature would be <code>set_value_t(V1, V2)</code>, with the aggregate as what its destination holds; the stand-in uses one key for both to stay short.</p>
+
+<h2>8. A leaf that completes later: <code>run_loop</code></h2>
+<p>A scheduler's operation states queue themselves in <code>start</code>, and the loop completes them later. On the right, <code>start</code> returns an empty handle, meaning nothing is ready yet. The task function returns whatever its receiver's completion hands back, and the loop runs that before taking the next task. That makes the loop the bottom of the machine stack, which in D4481 is the job of whoever drives the work. <code>set_value_t()</code> has no payload, so this leaf never asks for a destination. The queue itself (a mutex, a condition variable and a list) is the same in both columns and is left out.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">class run_loop {
+  struct task {
+    void (*execute)(task*) noexcept;
+    task* next = nullptr;
+  };
+
+  template &lt;class R&gt;
+  struct op : task {
+    using operation_state_concept = operation_state_t;
+    run_loop* loop;
+    R rcvr;
+
+    op(run_loop* l, R r) : task{&amp;run}, loop(l), rcvr(std::move(r)) {}
+
+    void start() &amp; noexcept { loop-&gt;push_back(this); }
+
+    static void run(task* t) noexcept {
+      auto&amp; self = *static_cast&lt;op*&gt;(t);
+      if (get_stop_token(execution::get_env(self.rcvr)).stop_requested()) {
+        execution::set_stopped(std::move(self.rcvr));
+      } else {
+        execution::set_value(std::move(self.rcvr));
+      }
+    }
+  };
+
+ public:
+  void run() {
+    while (task* t = pop_front()) {
+      t-&gt;execute(t);
+    }
+  }
+  // ... the queue: unchanged</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">class run_loop {
+  struct task {
+    operation_handle (*execute)(task*) noexcept;
+    task* next = nullptr;
+  };
+
+  template &lt;class R&gt;
+  struct op : task {
+    using operation_state_concept = operation_state_t;
+    run_loop* loop;
+    R rcvr;
+
+    op(run_loop* l, R r) : task{&amp;run}, loop(l), rcvr(std::move(r)) {}
+
+    operation_handle start() &amp; noexcept {
+      loop-&gt;push_back(this);
+      return {};  // nothing is ready yet
+    }
+
+    static operation_handle run(task* t) noexcept {
+      auto&amp; self = *static_cast&lt;op*&gt;(t);
+      if (get_stop_token(execution::get_env(self.rcvr)).stop_requested()) {
+        return self.rcvr.template complete&lt;set_stopped_t()&gt;();
+      } else {
+        return self.rcvr.template complete&lt;set_value_t()&gt;();
+      }
+    }
+  };
+
+ public:
+  void run(operation_handle h = {}) {
+    execution::run(h);  // whatever the caller&#x27;s start handed back
+    while (task* t = pop_front()) {
+      execution::run(t-&gt;execute(t));
+    }
+  }
+  // ... the queue: unchanged</code></pre></div></div>
+<h2>9. The root: <code>sync_wait</code></h2>
+<p>Where the asynchronous world ends. On the left, the receiver stores what arrives and tells the loop to finish. On the right it answers with addresses in its own state, notes which completion happened, and returns an empty handle, because nothing above it is waiting. The loop is also given whatever <code>start</code> returned, since an operation that completes inline hands its continuation back rather than running it.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">template &lt;class V&gt;
+struct sync_wait_state {
+  run_loop loop;
+  std::optional&lt;V&gt; value;
+  exception_ptr error;
+};
+
+template &lt;class V&gt;
+struct sync_wait_receiver {
+  using receiver_concept = receiver_t;
+  sync_wait_state&lt;V&gt;* st;
+
+  template &lt;class A&gt;
+  void set_value(A&amp;&amp; a) &amp;&amp; noexcept {
+    try {
+      st-&gt;value.emplace(std::forward&lt;A&gt;(a));
+    } catch (...) {
+      st-&gt;error = std::current_exception();
+    }
+    st-&gt;loop.finish();
+  }
+
+  void set_error(exception_ptr e) &amp;&amp; noexcept {
+    st-&gt;error = std::move(e);
+    st-&gt;loop.finish();
+  }
+
+  void set_stopped() &amp;&amp; noexcept { st-&gt;loop.finish(); }
+
+  prop&lt;get_scheduler_t, run_loop::scheduler&gt; get_env() const noexcept {
+    return {get_scheduler, st-&gt;loop.get_scheduler()};
+  }
+};
+
+template &lt;class S&gt;
+std::optional&lt;value_of&lt;S&gt;&gt; sync_wait(S&amp;&amp; s) {
+  using V = value_of&lt;S&gt;;
+  sync_wait_state&lt;V&gt; st;
+  auto op = execution::connect(std::forward&lt;S&gt;(s), sync_wait_receiver&lt;V&gt;{&amp;st});
+  execution::start(op);
+  st.loop.run();
+  if (st.error) {
+    std::rethrow_exception(st.error);
+  }
+  return std::move(st.value);
+}</code></pre></div><div class="col"><div class="hd new">C++29</div><pre><code class="language-cpp">template &lt;class V&gt;
+struct sync_wait_state {
+  run_loop loop;
+  slot&lt;V&gt; value;
+  slot&lt;exception_ptr&gt; error;
+};
+
+template &lt;class V&gt;
+struct sync_wait_receiver {
+  using receiver_concept = receiver_t;
+  sync_wait_state&lt;V&gt;* st;
+
+  template &lt;class Sig&gt;
+  void* destination() noexcept {
+    if constexpr (same_as&lt;Sig, set_value_t(V)&gt;) {
+      return st-&gt;value.address();
+    } else {
+      return st-&gt;error.address();
+    }
+  }
+
+  template &lt;class Sig&gt;
+  operation_handle complete() noexcept {
+    if constexpr (same_as&lt;Sig, set_value_t(V)&gt;) {
+      st-&gt;value.adopt();
+    } else if constexpr (!same_as&lt;Sig, set_stopped_t()&gt;) {
+      st-&gt;error.adopt();
+    }
+    st-&gt;loop.finish();
+    return {};  // nothing more to run here
+  }
+
+  prop&lt;get_scheduler_t, run_loop::scheduler&gt; get_env() const noexcept {
+    return {get_scheduler, st-&gt;loop.get_scheduler()};
+  }
+};
+
+template &lt;class S&gt;
+std::optional&lt;value_of&lt;S&gt;&gt; sync_wait(S&amp;&amp; s) {
+  using V = value_of&lt;S&gt;;
+  sync_wait_state&lt;V&gt; st;
+  auto op = execution::connect(std::forward&lt;S&gt;(s), sync_wait_receiver&lt;V&gt;{&amp;st});
+  st.loop.run(execution::start(op));
+  if (st.error.has_value()) {
+    std::rethrow_exception(*st.error);
+  }
+  if (!st.value.has_value()) {
+    return std::nullopt;  // stopped
+  }
+  return std::optional&lt;V&gt;(std::move(*st.value));
+}</code></pre></div></div>
+<p class="note">The last line moves the value out of the slot into the returned <code>optional</code>, because <code>optional</code> has no way to let someone else construct into it. That one move is where the destination chain meets synchronous code, and it's a reason for D4481 to propose a <code>slot</code>-like type, or a way to construct into an <code>optional</code>, rather than leave every algorithm to write one.</p>
+
+<h2>10. The erased boundary: where 4A lives</h2>
+<p>Sections 2 to 9 are what WG21 would standardize. This is what a platform's ABI would fix: what a receiver turns into when the callee can't see its type, as behind P4223's <code>function</code>. The left column is P4223R2's own erased receiver, with its completions. The right is the same receiver under 4A, in two halves: the callee's side, which the implementation is connected to, and the caller's side, where a composed receiver's member templates become a static table, as <code>vtable_for</code> does on the left.</p>
+<p>The erased receiver shrinks from a target, a vtable and an environment to one pointer to the caller's record, whose only member is a pointer to a static table. The table has one destination function per completion that carries a payload, in place of one completion function per signature. And <code>complete</code> returns a handle instead of calling through the table, so an inline completion unwinds to the caller, which can carry on in place, rather than nesting a call.</p>
+
+<div class="tony"><div class="col"><div class="hd">C++26</div><pre><code class="language-cpp">// a receiver that forwards completions to a Target
+// it doesn&#x27;t know the type of
+class erased_receiver {
+ public:
+  using receiver_concept = ex::receiver_t;
+
+  template &lt;class Target&gt;
+  erased_receiver(Target&amp; target, erased_env env) noexcept
+      : target_(&amp;target), vtable_(&amp;vtable_for&lt;Target&gt;), env_(env) {}
+
+  void set_value(std::optional&lt;std::string&gt; value) &amp;&amp; noexcept {
+    vtable_-&gt;set_value(target_, std::move(value));
+  }
+  void set_error(std::exception_ptr error) &amp;&amp; noexcept {
+    vtable_-&gt;set_error(target_, std::move(error));
+  }
+  void set_stopped() &amp;&amp; noexcept { vtable_-&gt;set_stopped(target_); }
+  erased_env get_env() const noexcept { return env_; }
+
+ private:
+  struct vtable {
+    void (*set_value)(void*, std::optional&lt;std::string&gt;) noexcept;
+    void (*set_error)(void*, std::exception_ptr) noexcept;
+    void (*set_stopped)(void*) noexcept;
+  };
+
+  template &lt;class Target&gt;
+  static constexpr vtable vtable_for{
+      [](void* target, std::optional&lt;std::string&gt; value) noexcept {
+        static_cast&lt;Target*&gt;(target)-&gt;set_value(std::move(value));
+      },
+      [](void* target, std::exception_ptr error) noexcept {
+        static_cast&lt;Target*&gt;(target)-&gt;set_error(std::move(error));
+      },
+      [](void* target) noexcept {
+        static_cast&lt;Target*&gt;(target)-&gt;set_stopped();
+      }};
+
+  void* target_;
+  vtable const* vtable_;
+  erased_env env_;
+};</code></pre></div><div class="col"><div class="hd new">C++29 (4A)</div><pre><code class="language-cpp">using value_t = std::optional&lt;std::string&gt;;
+
+// the callee&#x27;s side: what an implementation is connected to
+class erased_receiver {
+ public:
+  using receiver_concept = receiver_t;
+
+  explicit erased_receiver(continuation* k) noexcept : k_(k) {}
+
+  template &lt;class Sig&gt;
+  void* destination() noexcept {
+    return table()-&gt;destination[index&lt;Sig&gt;](k_);
+  }
+  template &lt;class Sig&gt;
+  operation_handle complete() noexcept {
+    return {k_, index&lt;Sig&gt;};  // returned, not called
+  }
+  empty_env get_env() const noexcept { return {}; }  // not prototyped
+
+  template &lt;class Sig&gt;
+  static constexpr int index =
+      same_as&lt;Sig, set_value_t(value_t)&gt;               ? 0
+      : same_as&lt;Sig, set_error_t(std::exception_ptr)&gt; ? 1
+                                                       : 2;
+
+ private:
+  using table_t = completion_table&lt;2&gt;;  // value, error
+  table_t const* table() const noexcept {
+    return static_cast&lt;table_t const*&gt;(k_-&gt;table);
+  }
+  continuation* k_;
+};
+
+// the caller&#x27;s side: a composed receiver, erased
+template &lt;class Rcvr&gt;
+struct erased_record : continuation {
+  Rcvr rcvr;
+
+  explicit erased_record(Rcvr r)
+      : continuation{&amp;table_for}, rcvr(std::move(r)) {}
+
+  static constexpr completion_table&lt;2&gt; table_for{
+      [](continuation* k, int how) noexcept -&gt; operation_handle {
+        auto&amp; r = static_cast&lt;erased_record*&gt;(k)-&gt;rcvr;
+        switch (how) {
+          case 0: return r.template complete&lt;set_value_t(value_t)&gt;();
+          case 1: return r.template complete&lt;
+                      set_error_t(std::exception_ptr)&gt;();
+          default: return r.template complete&lt;set_stopped_t()&gt;();
+        }
+      },
+      {[](continuation* k) noexcept -&gt; void* {
+         return static_cast&lt;erased_record*&gt;(k)
+             -&gt;rcvr.template destination&lt;set_value_t(value_t)&gt;();
+       },
+       [](continuation* k) noexcept -&gt; void* {
+         return static_cast&lt;erased_record*&gt;(k)
+             -&gt;rcvr.template destination&lt;
+                 set_error_t(std::exception_ptr)&gt;();
+       }}};
+};</code></pre></div></div>
+<p class="note">The right column has no environment, where the left carries <code>env_</code>. Under 4A it would most naturally join the table as query functions, which is the README's argument 3: the table can grow without changing the record. Tested with a <code>just</code>, and with a <code>then</code> filtering its child behind the erasure: <code>start</code> returned a handle naming the caller's record, and running it delivered the value in the caller's storage (observed). The other answering strategies from the README's table go here too. A pass-through layer resolving once, up front, would replace a destination lambda that asks its parent with one that loads a pointer saved at set-up, without changing the table's shape.</p>
+
+<h2>11. What the compiler emits for section 1's body</h2>
+<p>No C++26 code corresponds to this, so it's a listing rather than a table: section 1's right column, lowered by hand to the 4A ABI (<code>abi4a.h</code>, which is <code>kv-dest/async_abi.h</code> with the record changed to a table pointer and <code>out</code> removed). It was tested behind an erased root, with a backing store that completes inline and one that completes later, on hits, misses, absent keys and errors (observed). The comments quote the source line each part implements.</p>
+
+<div class="tony one"><div class="col"><div class="hd new">The interface</div><pre><code class="language-cpp">// lookup kv_store::get(std::string key) const noexcept;  becomes, beside it,
+struct kv_store {
+  virtual ~kv_store() = default;
+  // the entry: arguments, then the caller&#x27;s record and its async stack
+  virtual async_next get_entry(std::string* key, async_cont* k,
+                               async_sp sp) const noexcept = 0;
+};</code></pre></div></div>
+<p>Beside every virtual function that returns a <code>function</code>, the compiler emits an entry, which <code>co_await</code> calls directly. This is <code>kv-handle</code>'s visible entry. Through a stored <code>lookup</code> object the call would go through <code>function</code>'s erased entry instead, which costs one more indirect call. A by-value <code>std::string</code> is passed by invisible reference and stays valid until the operation completes, as <code>async_abi.h</code> specifies.</p>
+
+<div class="tony one"><div class="col"><div class="hd new">The frame and its table</div><pre><code class="language-cpp">// The body&#x27;s frame: what lives across its one suspension.
+struct cache_get_frame : async_cont {  // our record, as the child&#x27;s caller
+  async_cont* k;                       // our caller&#x27;s record
+  cache const* self;
+  std::string* key;                    // our parameter, in our caller&#x27;s storage
+  std::optional&lt;std::string&gt; arg;      // backing_-&gt;get&#x27;s argument
+  union {
+    std::optional&lt;std::string&gt; value;  // the local `value`
+    std::error_code ec;                // the handler&#x27;s `ec`
+  };
+  bool has_value = false;
+
+  cache_get_frame(async_cont const&amp; rec, async_cont* k, cache const* self,
+                  std::string* key)
+      : async_cont(rec), k(k), self(self), key(key), arg(std::in_place, *key) {}
+  ~cache_get_frame() {
+    if (has_value) value.~optional();
+  }
+};
+
+async_next cache_get_resume(async_cont* c, int how) noexcept;
+
+// Its table: where the child we await constructs each payload. These are
+// the frame&#x27;s own variables, so the answers are static.
+inline constexpr x29::completion_table&lt;2&gt; cache_get_table{
+    &amp;cache_get_resume,
+    {[](async_cont* c) noexcept -&gt; void* {
+       return &amp;static_cast&lt;cache_get_frame*&gt;(c)-&gt;value;
+     },
+     [](async_cont* c) noexcept -&gt; void* {
+       return &amp;static_cast&lt;cache_get_frame*&gt;(c)-&gt;ec;
+     }}};
+
+// Completes our caller with an error made from an exception.
+inline async_next fail(async_cont* k, std::exception_ptr e) noexcept {
+  ::new (async_destination_of(k, ERROR)(k)) std::error_code(error_code_from(e));
+  return async_complete(k, ERROR);
+}</code></pre></div></div>
+<p>The frame holds only what lives across the one suspension. Its table answers "where?" with the frame's own variables: the local <code>value</code> and the handler's <code>ec</code> share a union, because the child constructs one or the other. That's the member template of section 3, instantiated twice and erased. The answers are static here. A frame that passed a completion through would answer with its caller's destination instead, which is where 4A's chaining or resolving-once would show.</p>
+
+<div class="tony one"><div class="col"><div class="hd new">The entry and the resume function</div><pre><code class="language-cpp">async_next cache::get_entry(std::string* key, async_cont* k,
+                            async_sp sp) const noexcept {
+  try {
+    // if (auto value = entries_.find(key)) co_return value;
+    // Nothing has suspended yet: this runs on the machine stack, no frame.
+    if (auto value = entries_.find(*key)) {
+      ::new (async_destination_of(k, VALUE)(k))
+          std::optional&lt;std::string&gt;(std::move(value));
+      return async_complete(k, VALUE);
+    }
+  } catch (...) {
+    return fail(k, std::current_exception());  // catch (...)
+  }
+
+  // The miss can suspend, so from here the body has a frame.
+  void* mem = async_push(&amp;sp, sizeof(cache_get_frame));
+  cache_get_frame* f;
+  try {
+    f = ::new (mem) cache_get_frame({&amp;cache_get_table}, k, this, key);
+  } catch (...) {  // copying the key into the argument threw
+    return fail(k, std::current_exception());
+  }
+
+  // auto value = co_await backing_-&gt;get(key);
+  async_next n = backing_-&gt;get_entry(&amp;*f-&gt;arg, f, sp);
+  if (n.next == f) {
+    return cache_get_resume(f, n.how);  // it completed inline: carry on here
+  }
+  return n;  // pending: whoever completes it runs us later
+}
+
+async_next cache_get_resume(async_cont* c, int how) noexcept {
+  auto* f = static_cast&lt;cache_get_frame*&gt;(c);
+  async_cont* k = f-&gt;k;
+  f-&gt;arg.reset();  // the full-expression ends: the argument goes
+  async_next done;
+  switch (how) {
+    case VALUE:
+      f-&gt;has_value = true;
+      // if (value) { try { entries_.insert(key, *value); } catch (...) {} }
+      if (f-&gt;value) {
+        try {
+          f-&gt;self-&gt;entries_.insert(*f-&gt;key, *f-&gt;value);
+        } catch (...) {
+        }
+      }
+      // co_return value;
+      ::new (async_destination_of(k, VALUE)(k))
+          std::optional&lt;std::string&gt;(std::move(f-&gt;value));
+      done = async_complete(k, VALUE);
+      break;
+    case ERROR:  // catch (std::error_code ec) { co_return with_error(ec); }
+      ::new (async_destination_of(k, ERROR)(k)) std::error_code(f-&gt;ec);
+      done = async_complete(k, ERROR);
+      break;
+    default:  // stopped: no handler sees it
+      done = async_complete(k, STOPPED);
+  }
+  f-&gt;~cache_get_frame();  // and the frame is popped: our caller&#x27;s top never moved
+  return done;
+}</code></pre></div></div>
+<ul>
+<li><strong>The hit path has no frame.</strong> Nothing has suspended before <code>co_return value</code>, so that path runs on the machine stack like a synchronous function and constructs the result straight into the caller's destination. <code>kv-handle</code> measured the same thing (0 B of frame storage on a hit). It does mean the frame is allocated at the first suspension point that can actually suspend, not at entry, which bears on the open question of whether frame allocation belongs to <code>connect</code> or <code>start</code>: an allocation failure becomes reportable only on the paths that allocate.</li>
+<li><strong>Each completion is the caller's to run.</strong> Every path ends by returning <code>{k, how}</code>. If the child completed inline, its returned handle names this frame's record, and the entry carries on in place (the fall-through) instead of returning to a loop.</li>
+<li><strong>The argument dies at the end of its full-expression,</strong> before the rest of the body runs, as D4471 specifies for temporaries.</li>
+<li><strong>A missed optimization worth naming.</strong> The <code>catch (std::error_code ec)</code> handler only passes <code>ec</code> on. A compiler could see that and give the child its caller's error destination directly (a pass-through), removing the copy. For <code>error_code</code> that's nothing; for an error type that can't be copied, it decides whether the body compiles.</li>
+<li><strong><code>co_return value</code> on the miss path moves</strong>, as <code>return value;</code> does in a synchronous function with two returned variables. Constructing the local in the caller's storage, in the manner of NRVO, would save it, but no compiler does that for the synchronous equivalent either.</li>
+</ul>
+
+<h2>12. The same kind of leaf, in C</h2>
+<p>A backing store written in C, behind the same ABI, completing later from an event loop, or inline with an error for an empty key. Its interface uses C types (<code>c_value</code>, an <code>int</code> error), so either side of it could be written in C. It was compiled as C11 with <code>-pedantic</code> and called from a C++ root (observed). The C code does what a C++29 leaf does: it asks where the payload goes, constructs it there, and returns the caller's record instead of calling it.</p>
+
+<div class="tony one"><div class="col"><div class="hd new">c_store.h</div><pre><code class="language-c">/* The C++ declaration this entry stands behind:
+ *
+ *   using c_lookup = function&lt;
+ *       sender_tag(c_store const*, char const*) noexcept,
+ *       completion_signatures&lt;set_value_t(c_value), set_error_t(int),
+ *                             set_stopped_t()&gt;&gt;;
+ *   c_lookup c_store_get(c_store const* store, char const* key) noexcept;
+ */
+typedef struct c_value {
+  char const* data; /* NULL when the key is absent */
+  size_t len;
+} c_value;
+
+enum { C_VALUE = 0, C_ERROR = 1, C_STOPPED = 2 };
+
+async_next c_store_get_entry(c_store const* store, char const* key,
+                             async_cont* k, async_sp sp) ASYNC_NOEXCEPT;</code></pre></div></div>
+<div class="tony one"><div class="col"><div class="hd new">c_store.c</div><pre><code class="language-c">/* What lives across the suspension: our frame on the async stack. */
+typedef struct get_frame {
+  task task; /* first, so the loop can run it */
+  c_store const* store;
+  char const* key;
+  async_cont* k; /* our caller&#x27;s record */
+} get_frame;
+
+/* Runs from the event loop, after the entry returned &quot;pending&quot;. */
+static async_next get_later(task* t) {
+  get_frame* f = (get_frame*)t;
+  async_cont* k = f-&gt;k;
+  char const* found = find(f-&gt;store, f-&gt;key);
+
+  c_value* v = async_destination_of(k, C_VALUE)(k); /* ask: where? */
+  v-&gt;data = found;
+  v-&gt;len = found ? strlen(found) : 0;
+  /* the frame is popped: our caller&#x27;s top never moved */
+  return async_complete(k, C_VALUE); /* returned, not called */
+}
+
+async_next c_store_get_entry(c_store const* s, char const* key,
+                             async_cont* k, async_sp sp) {
+  if (key[0] == &#x27;\0&#x27;) { /* an empty key is an error, reported inline */
+    int* e = async_destination_of(k, C_ERROR)(k);
+    *e = EINVAL;
+    return async_complete(k, C_ERROR);
+  }
+  get_frame* f = async_push(&amp;sp, sizeof *f);
+  f-&gt;task.run = get_later;
+  f-&gt;store = s;
+  f-&gt;key = key;
+  f-&gt;k = k;
+  defer(&amp;f-&gt;task);
+  async_next pending = {NULL, ASYNC_PENDING};
+  return pending;
+}</code></pre></div></div>
+<p class="note">What C can't express is the static part: the destination member templates, the completion signatures and the <code>if constexpr</code> choices. A C implementation sees only the erased form, so its declared completions live in a comment and in the order of the table's functions. That's the README's argument 4 (4A's table is a plain struct of function pointers) seen from the C side. Stopped isn't wired up: the environment, and so the stop token, isn't in the ABI yet.</p>
+
+<h2>Files</h2>
+<p>The project docs in <code>tony/</code> have every file the tables were cut from: <code>abi4a.h</code>, <code>x29.hpp</code> (the stand-in), <code>algos26.hpp</code> and <code>algos29.hpp</code> (the algorithms), <code>erased.hpp</code>, <code>lowered.hpp</code>, <code>c_store.h</code> and <code>c_store.c</code>, the tests, and <code>page.html</code>, this page.</p>
+<pre><code class="language-sh"># C++26 column, against stdexec main (30acdb0 when built)
+g++ -std=c++23 -fsanitize=address,undefined -I$STDEXEC/include tests26.cpp -o t26 &amp;&amp; ./t26
+# C++29 columns
+g++ -std=c++23 -fsanitize=address,undefined tests29.cpp -o t29 &amp;&amp; ./t29
+g++ -std=c++23 -fsanitize=address,undefined erased_test.cpp -o et &amp;&amp; ./et
+g++ -std=c++23 -fsanitize=address,undefined lowered_test.cpp -o lt &amp;&amp; ./lt
+gcc -std=c11 -pedantic -c c_store.c &amp;&amp; g++ -std=c++23 c_test.cpp c_store.o -o ct &amp;&amp; ./ct</code></pre>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/c.min.js"></script>
+<script>try { hljs.highlightAll(); } catch (e) {}</script>
+</body></html>

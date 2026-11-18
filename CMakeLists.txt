@@ -38,9 +38,11 @@ endif()
 find_package(Threads REQUIRED)
 
 include(infra/cmake/beman-xfail-compile.cmake)
+include(cmake/stdexec.cmake)
 
 if(ASYNC_PROTOTYPES_BUILD_TESTS)
     enable_testing()
 endif()
 
 add_subdirectory(direct-call)
+add_subdirectory(app-scope)

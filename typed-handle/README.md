@@ -29,7 +29,7 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 
 | File | What |
 |---|---|
-| `handle.hpp` | The handles, `start_t`, following a chain at compile time (`settle`), the driver (`run`), common types, `either`, and the four modes |
+| `handle.hpp` | The handles, `start_t`, following a chain at compile time (`settle`), running a loop of known types as a loop, the driver (`run`), common types, `either`, and the four modes |
 | `algos.hpp` | `just`, `then`, `let_value`, `when_all`, `repeat_until`, an erased boundary, and a root, written once for every mode |
 | `checks.cpp` | Results, errors, an immovable value, a loop's stack depth, and which handle types come back |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
@@ -94,7 +94,7 @@ scenario completes inline.
 | `let`: `let_value` starting a `just` | 9 / 8 | 79 / 68 | 9 / 8 | 9 / 8 | 0 / 3 / 0 / 0 |
 | `both`: `when_all` of two `then`s | 68 / 66 | 118 / 112 | 78 / 85 | 85 / 69 | 0 / 3 / 0–1 / 0 |
 | `boundary`: `then` around an erased boundary around `then` | 82 / 69 | 106 / 91 | 82 / 71 | 82 / 71 | 2 / 5 / 2 / 2 |
-| `repeat`: per iteration | 15 / 24 | 51 / 52 | 37 / 40 | 49 / 37 | 0 / 3 / 1 / 1 |
+| `repeat`: per iteration | 15 / 24 | 51 / 52 | 37 / 40 | 33 / 32 | 0 / 3 / 1 / 0 |
 
 Each cell is GCC / Clang. In the indirect column, where GCC and Clang differ
 the cell gives a range, GCC's count first.
@@ -120,12 +120,21 @@ the cell gives a range, GCC's count first.
    with no indirect calls. With `std::variant` as `choice`'s storage GCC took
    99; a hand-written tagged union is what's measured. The rest of GCC's gap
    is unexplained.
-5. **Loops pay one indirect call per iteration.** `repeat_until`'s
-   completion either ends or restarts, so the cycle passes through an erased
-   handle (TYPED) or through a `choice` the driver has already seen (VARIANT,
-   where following stops at a repeated type and the loop runs it erased):
-   37 / 40 and 49 / 37 instructions per iteration, against ERASED's 51 / 52
-   with three indirect calls.
+5. **A loop of known types runs as a loop.** When following a chain reaches
+   a typed handle whose own chain can come back to it (a type-level check,
+   `is_loop_head` in `handle.hpp`), the driver runs that handle in a `for`
+   loop: each trip follows the chain from it at compile time and stops when
+   the chain is back at it, and only leaving the loop is erased. This is
+   Lewis Baker's `resume_continuation` in `continuation.hpp`, applied to
+   typed handles. It needs the loop's branch to be typed: in VARIANT mode
+   `repeat_until`'s completion is a `choice` of ending and restarting, so the
+   whole cycle is known, and an iteration costs 33 / 32 instructions with no
+   indirect call (before the static loop: 49 / 37, one indirect call). In
+   TYPED mode the branch is erased, so there is no typed cycle to find; an
+   iteration still costs 37 / 40 with one indirect call. Nesting costs
+   15 / 24, but only because both compilers turn its recursion into a
+   sibling call (see 8); GCC also unrolls it four times. In VARIANT mode GCC
+   keeps the slots' engaged flags in memory on every trip.
 6. **An erased boundary costs the same in TYPED and VARIANT as in EAGER:**
    the two indirect calls are the boundary's own (the record's destination
    function, and its resume function for the completion that happened; the
@@ -143,7 +152,7 @@ machine stack from inside the loop's body:
 
 | Build | EAGER | ERASED | TYPED | VARIANT |
 |---|---|---|---|---|
-| `-O0`, ASan and UBSan (GCC) | 5,184 B; 575,424 B | 0 B; 0 B | 896 B; 896 B | 976 B; 976 B |
+| `-O0`, ASan and UBSan (GCC) | 5,184 B; 575,424 B | 0 B; 0 B | 896 B; 896 B | 0 B; 0 B |
 | `-O2` (GCC, Clang) | 16 B / 32 B, at 1000 | 0 B | 0 B | 0 B |
 
 8. **Deferring bounds the stack; nesting bounds it only when the optimizer
@@ -154,7 +163,7 @@ machine stack from inside the loop's body:
    iterations in either build. (Reading: TYPED's 896 bytes are the
    difference between the first iteration, which runs inside the driver's
    compile-time chain from `start`, and the rest, which run from its loop.
-   Not checked.)
+   Not checked. In VARIANT mode every iteration runs from the static loop.)
 
 ### Types
 
@@ -190,10 +199,11 @@ machine stack from inside the loop's body:
   `choice` costs little (with Clang) and keeps the types small. Robert's
   explosion came from an unbounded set; bounding it at a few alternatives and
   erasing beyond that looks enough for these algorithms.
-- Loops are the one place this design is worse than the optimizer's best
-  case for nesting: one indirect call per iteration. Lewis Baker's
-  `continuation.hpp` runs a cycle of known types in a static loop instead; the
-  driver here doesn't, and could.
+- Loops cost more than the optimizer's best case for nesting, but with a
+  bounded `choice` at the loop's branch they need no indirect call, and
+  unlike nesting their stack stays flat without the optimizer's help. That
+  makes typed branches (VARIANT) worth more than erased ones (TYPED) twice
+  over: on the path through the branch, and around loops.
 - The pair `<R, Sig>` maps onto the erased form cleanly. Here the erased form
   is `{function, data}` with one function per `(T, Sig)`, so there is no
   `how` at all; converting to `{record, how}` instead would need every

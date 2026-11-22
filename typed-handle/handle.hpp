@@ -22,8 +22,10 @@
 // Where two different typed handles meet (a branch that may complete either
 // way), the common type is the erased handle, or in VARIANT mode a choice of
 // up to TH_MAX_CHOICE typed handles. Following a chain stops at an
-// erased handle, at no_operation, or at a type already seen (a cycle), and
-// run() loops over erased handles until there is nothing left.
+// erased handle, at no_operation, or at a type already seen (a cycle). A
+// typed handle whose own chain can come back to it heads a loop of known
+// types, which runs as a loop. run() loops over erased handles until there
+// is nothing left.
 #pragma once
 
 #include <concepts>
@@ -207,10 +209,107 @@ class choice {
   unsigned char index_;
 };
 
+// ---- Cycles of known types ------------------------------------------------
+// What running a handle can hand back, as types.
+template <class... Hs>
+struct hlist {};
+template <class H>
+struct successors {
+  using type = hlist<decltype(std::declval<H const&>()())>;
+};
+template <>
+struct successors<erased_handle> {
+  using type = hlist<>;
+};
+template <>
+struct successors<no_operation> {
+  using type = hlist<>;
+};
+template <class... Hs>
+struct successors<choice<Hs...>> {
+  using type = hlist<Hs...>;
+};
+
+// Whether following from H can come back to Target without passing through
+// a type in Visited.
+template <class Target, class Visited, class H>
+struct reaches;
+template <class Target, class... Visited, class H>
+struct reaches<Target, hlist<Visited...>, H> {
+  template <class S>
+  static constexpr bool via() noexcept {
+    if constexpr (std::same_as<S, Target>) {
+      return true;
+    } else if constexpr (std::same_as<S, H> ||
+                         (std::same_as<S, Visited> || ...)) {
+      return false;
+    } else {
+      return reaches<Target, hlist<Visited..., H>, S>::value;
+    }
+  }
+  template <class... Ss>
+  static constexpr bool any(hlist<Ss...>) noexcept {
+    return (via<Ss>() || ...);
+  }
+  static constexpr bool value = any(typename successors<H>::type{});
+};
+
+// A loop's head: a typed handle whose own chain can come back to it.
+template <class H>
+inline constexpr bool is_loop_head = false;
+template <class T, class Sig>
+inline constexpr bool is_loop_head<operation_handle<T, Sig>> =
+    reaches<operation_handle<T, Sig>, hlist<>, operation_handle<T, Sig>>::value;
+
+// One trip round a loop: back at the head, or out of the loop.
+template <class Head>
+struct loop_step {
+  TH_INLINE explicit loop_step(Head h) noexcept : again(true), next(h) {}
+  TH_INLINE explicit loop_step(erased_handle e) noexcept
+      : again(false), exit(e) {}
+  bool again;
+  union {
+    Head next;
+    erased_handle exit;
+  };
+};
+
+template <class Head, class... Seen, class X>
+TH_INLINE loop_step<Head> step_(X x) noexcept {
+  if constexpr (std::same_as<X, Head>) {
+    return loop_step<Head>(x);
+  } else if constexpr (is_erased<X>) {
+    return loop_step<Head>(x);
+  } else if constexpr (is_none<X>) {
+    return loop_step<Head>(erased_handle{});
+  } else if constexpr ((std::same_as<X, Seen> || ...)) {
+    return loop_step<Head>(erased_handle(x));  // another cycle: leave
+  } else if constexpr (is_choice<X>) {
+    return x.visit([](auto alt) noexcept -> loop_step<Head> {
+      return step_<Head, Seen..., X>(alt);
+    });
+  } else {
+    return step_<Head, Seen..., X>(x());
+  }
+}
+
+// Run a loop of known types as a loop: each trip follows the chain from the
+// head at compile time, and only leaving the loop is erased.
+template <class... Seen, class Head>
+TH_INLINE erased_handle loop_(Head h) noexcept {
+  for (;;) {
+    loop_step<Head> s = step_<Head, Seen..., Head>(h());
+    if (!s.again) {
+      return s.exit;
+    }
+    h = s.next;
+  }
+}
+
 // Follow a chain of typed handles at compile time until it reaches an erased
-// handle, nothing, or a type already seen. The depth of this recursion is
-// bounded by the number of distinct handle types, not by how often the chain
-// runs, and it is inlined.
+// handle, nothing, a loop's head, or a type already seen. The depth of this
+// recursion is bounded by the number of distinct handle types, not by how
+// often the chain runs, and it is inlined.
 template <class... Seen, class H>
 TH_INLINE erased_handle settle_(H h) noexcept {
   if constexpr (is_erased<H>) {
@@ -218,7 +317,9 @@ TH_INLINE erased_handle settle_(H h) noexcept {
   } else if constexpr (is_none<H>) {
     return {};
   } else if constexpr ((std::same_as<H, Seen> || ...)) {
-    return h;  // a cycle: hand it to the loop, erased
+    return h;  // a cycle not entered at its head: hand it on, erased
+  } else if constexpr (is_loop_head<H>) {
+    return loop_<Seen...>(h);
   } else if constexpr (is_choice<H>) {
     return h.visit([](auto alt) noexcept -> erased_handle {
       return settle_<Seen..., H>(alt);

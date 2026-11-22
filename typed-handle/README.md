@@ -30,8 +30,9 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 | File | What |
 |---|---|
 | `handle.hpp` | The handles, `start_t`, following a chain at compile time (`settle`), running a loop of known types as a loop, the driver (`run`), common types, `either`, and the four modes |
-| `algos.hpp` | `just`, `then`, `let_value`, `when_all`, `repeat_until`, an erased boundary, and a root, written once for every mode |
-| `checks.cpp` | Results, errors, an immovable value, a loop's stack depth, and which handle types come back |
+| `env.hpp` | Environments, `never_stop_token`, and a simplified `inplace_stop_source` with callbacks |
+| `algos.hpp` | `just`, `just_unless_stopped`, `then`, `let_value`, `when_all`, `repeat_until`, an erased boundary, and a root, written once for every mode |
+| `checks.cpp` | Results, errors, an immovable value, stopping, a loop's stack depth, and which handle types come back |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
 
 ## Four modes
@@ -92,7 +93,7 @@ scenario completes inline.
 | `chain4`: four `then`s that can't throw | 9 / 8 | 98 / 89 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
 | `chain4_throwing`: four `then`s that may throw | 42 / 35 | 170 / 153 | 149 / 143 | 80 / 40 | 0 / 4 / 3–4 / 0 |
 | `let`: `let_value` starting a `just` | 9 / 8 | 79 / 68 | 9 / 8 | 9 / 8 | 0 / 3 / 0 / 0 |
-| `both`: `when_all` of two `then`s | 68 / 66 | 118 / 112 | 78 / 85 | 85 / 69 | 0 / 3 / 0–1 / 0 |
+| `both`: `when_all` of two `then`s | 71 / 70 | 122 / 115 | 81 / 89 | 88 / 73 | 0 / 3 / 0–1 / 0 |
 | `boundary`: `then` around an erased boundary around `then` | 82 / 69 | 106 / 91 | 82 / 71 | 82 / 71 | 2 / 5 / 2 / 2 |
 | `repeat`: per iteration | 15 / 24 | 51 / 52 | 37 / 40 | 33 / 32 | 0 / 3 / 1 / 0 |
 
@@ -145,6 +146,9 @@ the cell gives a range, GCC's count first.
    GCC's `both` makes no indirect call; Clang's makes one. ERASED's counts are
    therefore a lower bound on what separately compiled code would pay.
 
+`both` includes constructing `when_all`'s own stop source, which it does
+even under a parent that can't be stopped (3 or 4 instructions; see 12).
+
 ### The stack
 
 `repeat_until` counting to 10 and to 1000, measuring the extent of the
@@ -188,12 +192,66 @@ machine stack from inside the loop's body:
     throw. Returning `auto` and calling `either()` where outcomes meet is all
     an algorithm does differently from one returning the erased handle.
 
+### Environments and stop tokens
+
+Receivers forward their parent's environment through `get_env()`;
+`when_all` gives its children its own stop token and, when the parent's
+token can be stopped, forwards a stop request with a callback registered on
+it; the erased boundary forwards the stop token, and only that query,
+through a function in the record's table. `just_unless_stopped` is a leaf
+that asks its stop token, completing stopped if stop has been requested.
+Each `_checked` scenario is its namesake with that leaf, under a root whose
+`inplace_stop_source` is never stopped; `both_live` is `both` under that
+root, with leaves that don't ask. Same measurements as above.
+
+| Scenario | EAGER | ERASED | TYPED | VARIANT | Indirect: E / Er / T / V |
+|---|---|---|---|---|---|
+| `chain4_unstoppable`: `chain4`'s leaf asks, but there is no token | 9 / 8 | 98 / 89 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
+| `chain4_checked` | 52 / 56 | 104 / 99 | 67 / 75 | 59 / 65 | 0 / 5 / 1 / 0 |
+| `both_live` | 155 / 131 | 203 / 174 | 165 / 153 | 157 / 137 | 0 / 3 / 0–1 / 0 |
+| `both_checked` | 167 / 144 | 212 / 188 | 199 / 176 | 174 / 147 | 0 / 3–5 / 1–3 / 0 |
+| `boundary_checked` | 104 / 90 | 125 / 110 | 109 / 97 | 111 / 88 | 3 / 6 / 4 / 3 |
+| `repeat_checked`: per iteration | 39 / 44 | 60 / 61 | 54 / 55 | 45 / 42 | 0 / 3 / 2 / 0 |
+
+12. **Forwarding environments costs nothing where nothing asks.** Adding
+    `get_env()` to every receiver left every scenario's counts unchanged
+    except `both`, whose `when_all` now constructs a stop source of its own.
+    A leaf that asks a token which can't be stopped compiles to `just`:
+    `chain4_unstoppable` costs what `chain4` does, because
+    `never_stop_token::stop_possible()` is a constant.
+13. **Every leaf that can be stopped is a place where outcomes meet.** Asking
+    a live token adds 43 / 48 instructions to `chain4` in EAGER mode. In TYPED
+    mode the leaf's branch (stopped, or a value) is erased: +58 / +67 and an
+    indirect call. In VARIANT mode it's a `choice`: +50 / +57, no indirect
+    call. So stop tokens make points 3 and 4 above matter more, not less.
+14. **Forwarding a parent's stop into `when_all` costs more than the rest of
+    `when_all`:** 61 to 84 instructions (`both_live` against `both`), in
+    every mode, for registering and deregistering one callback, which here is
+    two round trips through a spin lock. The leaves' own checks then add
+    only 9 to 34 more (`both_checked`).
+15. **Across the erased boundary the stop token costs one indirect call,**
+    the query function in the record's table, and 21 or 22 instructions in
+    EAGER mode (`boundary_checked` against `boundary`).
+16. **A loop that asks every iteration** costs 24 / 20 more per iteration in
+    EAGER mode, 12 / 10 in VARIANT mode, where the static loop still runs
+    with no indirect call, and 17 / 15 in TYPED mode, with a second indirect
+    call per iteration.
+17. **Receivers stay one pointer.** The root's stop token lives in its state,
+    not in its receiver: a receiver holding a token as well would be two
+    words, and couldn't be erased into `{function, data}` (the conversion's
+    `static_assert`). Everything an environment holds has to live in an
+    operation state, as `when_all`'s stop source does.
+
 ## Reading
 
 - The typed handle earns its keep where a delivery has exactly one possible
   outcome, which is most pass-through layers and every function that can't
   throw: there it costs what nesting costs, without relying on the optimizer
   for stack safety.
+- Stop tokens cost little where nothing can stop, and where something can,
+  the dominant cost is registering callbacks to forward a stop, not asking
+  for one. Each stoppable leaf adds a place where outcomes meet, which makes
+  how those are handled (erase or choose) more consequential.
 - Where outcomes meet, erase or branch is a real choice: erasing keeps the
   types trivial and costs about as much as erasing everything; a bounded
   `choice` costs little (with Clang) and keeps the types small. Robert's
@@ -214,7 +272,11 @@ machine stack from inside the loop's body:
 - Nothing completes asynchronously: no `run_loop`, no threads. An
   asynchronous completion arrives through whatever queues it, which holds
   erased handles, so typed handles matter only for what runs inline after it.
-- No environments, stop tokens or scheduler affinity.
+- Only the stop token is forwarded across the erased boundary; no other
+  query, and no scheduler affinity.
+- Nothing requests stop from another thread, and `inplace_stop_source` is
+  simplified (callbacks run under its spin lock), so registration costs are
+  indicative, not stdexec's.
 - No comparison with the `{record, how}` erased layout, which `kv-dest`
   measured, nor with Robert's branch itself (it isn't built here).
 - The erased boundary is in the same translation unit as its callee, behind

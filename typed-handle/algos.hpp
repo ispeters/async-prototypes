@@ -2,10 +2,12 @@
 //
 // A start or completion returns whatever handle it ends with: in TYPED mode
 // a typed handle where only one outcome is possible, and the erased handle
-// where outcomes branch (either(), common_handle_t). Environments aren't
-// prototyped.
+// where outcomes branch (either(), common_handle_t). A receiver's
+// environment comes from its parent through get_env(); receivers stay one
+// pointer, so whatever an environment holds lives in an operation state.
 #pragma once
 #include "handle.hpp"
+#include "env.hpp"
 
 #include <atomic>
 #include <exception>
@@ -50,6 +52,43 @@ just_sender<T> just(T v) {
   return {std::move(v)};
 }
 
+// ---- just_unless_stopped ------------------------------------------------
+// A leaf that asks its receiver's stop token: stopped if stop has been
+// requested, else a value. Against a token that can't be stopped it is just.
+template <class T>
+struct just_unless_stopped_sender {
+  using value_type = T;
+  T value;
+
+  template <class R>
+  struct op {
+    R rcvr;
+    T value;
+    op(R r, T v) : rcvr(r), value(std::move(v)) {}
+    op(op&&) = delete;
+
+    TH_INLINE auto start() & noexcept {
+      if constexpr (unstoppable<stop_token_of_t<R>>) {
+        return th::set_value(rcvr, std::move(value));
+      } else {
+        return either(
+            get_stop_token(th::get_env(rcvr)).stop_requested(),
+            [&] { return later<set_stopped_t()>(rcvr); },
+            [&] { return th::set_value(rcvr, std::move(value)); });
+      }
+    }
+  };
+
+  template <class R>
+  op<R> connect(R rcvr) && noexcept(std::is_nothrow_move_constructible_v<T>) {
+    return {rcvr, std::move(value)};
+  }
+};
+template <class T>
+just_unless_stopped_sender<T> just_unless_stopped(T v) {
+  return {std::move(v)};
+}
+
 // ---- then -----------------------------------------------------------------
 template <class Child, class F, class R>
 struct then_op {
@@ -76,6 +115,10 @@ struct then_op {
       } else {
         return later<Sig>(op->rcvr);
       }
+    }
+
+    TH_INLINE env_of_t<R> get_env() const noexcept {
+      return th::get_env(op->rcvr);
     }
   };
 
@@ -161,6 +204,10 @@ struct let_value_op {
         return later<Sig>(op->rcvr);
       }
     }
+
+    TH_INLINE env_of_t<R> get_env() const noexcept {
+      return th::get_env(op->rcvr);
+    }
   };
 
   struct rcvr2_t {  // the second child's: everything passes through
@@ -173,6 +220,10 @@ struct let_value_op {
     template <class Sig>
     TH_INLINE auto complete() noexcept {
       return later<Sig>(op->rcvr);
+    }
+
+    TH_INLINE env_of_t<R> get_env() const noexcept {
+      return th::get_env(op->rcvr);
     }
   };
 
@@ -284,9 +335,38 @@ struct when_all_op {
       }
       return op->arrive();
     }
+
+    // The children's stop token is when_all's own; the rest is the parent's.
+    // (Named, not deduced: a child asks for it while when_all_op is still
+    // being defined.)
+    TH_INLINE env<prop<get_stop_token_t, inplace_stop_token>, env_of_t<R>>
+    get_env() const noexcept {
+      return env{prop<get_stop_token_t, inplace_stop_token>{
+                     op->stop_source.get_token()},
+                 th::get_env(op->rcvr)};
+    }
+  };
+
+  // Stop requested of the parent is forwarded to the children, unless the
+  // parent's token can't be stopped.
+  using parent_token = stop_token_of_t<R>;
+  static_assert(unstoppable<parent_token> ||
+                    same_as<parent_token, inplace_stop_token>,
+                "only inplace_stop_token is forwarded");
+  struct forward_stop {
+    when_all_op* op;
+    void operator()() noexcept { op->stop_source.request_stop(); }
+  };
+  using on_stop_t = inplace_stop_callback<forward_stop>;
+  struct no_callback {
+    void reset() noexcept {}
   };
 
   R rcvr;
+  inplace_stop_source stop_source;
+  [[no_unique_address]] std::conditional_t<unstoppable<parent_token>,
+                                           no_callback, slot<on_stop_t>>
+      on_stop;
   Vs* results = nullptr;
   bool constructed[2] = {};
   slot<exception_ptr> errors[2];
@@ -303,6 +383,11 @@ struct when_all_op {
   when_all_op(when_all_op&&) = delete;
 
   TH_INLINE auto start() & noexcept {
+    if constexpr (!unstoppable<parent_token>) {
+      on_stop.emplace_from([&] {
+        return on_stop_t(get_stop_token(th::get_env(rcvr)), forward_stop{this});
+      });
+    }
     results = ::new (destination_of<R, set_value_t(Vs)>(rcvr)) Vs;
     th::run(th::start(child1));  // a fork: run what it hands back
     return th::start(child2);
@@ -312,10 +397,12 @@ struct when_all_op {
     if (state.exchange(error) != error) {
       failed = i;
     }
+    stop_source.request_stop();
   }
   void stop() noexcept {
     int expected = none;
     state.compare_exchange_strong(expected, stopped);
+    stop_source.request_stop();
   }
 
   using arrive_t = common_handle_t<
@@ -327,6 +414,7 @@ struct when_all_op {
     if (count.fetch_sub(1, std::memory_order_acq_rel) != 1) {
       return no_operation{};
     }
+    on_stop.reset();  // before completing: the parent may destroy *this
     if (state.load() == none) {
       return later<set_value_t(Vs)>(rcvr);
     }
@@ -383,6 +471,10 @@ struct repeat_until_op {
         op->child_op.reset();
         return later<Sig>(op->rcvr);
       }
+    }
+
+    TH_INLINE env_of_t<R> get_env() const noexcept {
+      return th::get_env(op->rcvr);
     }
   };
 
@@ -478,6 +570,7 @@ template <class V>
 struct boundary_table {
   erased_handle (*resume[3])(void*) noexcept;  // value, error, stopped
   void* (*destination[2])(void*) noexcept;     // value, error
+  inplace_stop_token (*stop_token)(void*) noexcept;  // the one query forwarded
 };
 template <class V>
 struct record {
@@ -494,8 +587,18 @@ TH_INLINE P opaque(P p) noexcept {
 }
 
 template <class V>
+struct erased_env {
+  record<V>* k;
+  TH_INLINE inplace_stop_token query(get_stop_token_t) const noexcept {
+    return k->table->stop_token(k);
+  }
+};
+
+template <class V>
 struct erased_receiver {
   record<V>* k;
+
+  TH_INLINE erased_env<V> get_env() const noexcept { return {k}; }
 
   template <class Sig>
   static constexpr int index = same_as<Sig, set_value_t(V)>                ? 0
@@ -525,10 +628,19 @@ struct boundary_op : record<V> {
     auto* self = static_cast<boundary_op*>(static_cast<record<V>*>(k));
     return destination_of<R, Sig>(self->rcvr);
   }
+  static inplace_stop_token stop_token_of(void* k) noexcept {
+    auto* self = static_cast<boundary_op*>(static_cast<record<V>*>(k));
+    if constexpr (unstoppable<stop_token_of_t<R>>) {
+      return {};
+    } else {
+      return get_stop_token(th::get_env(self->rcvr));
+    }
+  }
   static constexpr boundary_table<V> table_for{
       {&resume<set_value_t(V)>, &resume<set_error_t(exception_ptr)>,
        &resume<set_stopped_t()>},
-      {&dest<set_value_t(V)>, &dest<set_error_t(exception_ptr)>}};
+      {&dest<set_value_t(V)>, &dest<set_error_t(exception_ptr)>},
+      &stop_token_of};
 
   R rcvr;
   child_op_t child;
@@ -563,16 +675,25 @@ boundary_sender<Child> erase_boundary(Child c) {
 }
 
 // ---- a root: where the asynchronous world ends --------------------------
-template <class V>
+template <class V, class Token = never_stop_token>
 struct root_state {
   slot<std::conditional_t<std::is_void_v<V>, char, V>> value;
   slot<exception_ptr> error;
   bool stopped = false;
+  Token token;  // here, not in the receiver, which stays one pointer
 };
 
-template <class V>
+template <class V, class Token = never_stop_token>
 struct root_rcvr {
-  root_state<V>* st;
+  root_state<V, Token>* st;
+
+  TH_INLINE auto get_env() const noexcept {
+    if constexpr (unstoppable<Token>) {
+      return empty_env{};
+    } else {
+      return prop<get_stop_token_t, Token>{st->token};
+    }
+  }
 
   template <class Sig>
   void* destination() noexcept {
@@ -598,12 +719,14 @@ struct root_rcvr {
 };
 
 // Connect s to a root, run it to completion on this thread, then call
-// use(state). Everything here completes inline; nothing waits.
-template <class S, class Use>
-void run_root(S&& s, Use use) {
+// use(state). Everything here completes inline; nothing waits. The root's
+// environment has a stop token if one is given.
+template <class S, class Use, class Token = never_stop_token>
+void run_root(S&& s, Use use, Token token = {}) {
   using V = value_of<S>;
-  root_state<V> st;
-  auto op = th::connect(std::forward<S>(s), root_rcvr<V>{&st});
+  root_state<V, Token> st;
+  st.token = token;
+  auto op = th::connect(std::forward<S>(s), root_rcvr<V, Token>{&st});
   th::run(th::start(op));
   use(st);
 }

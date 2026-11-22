@@ -40,6 +40,13 @@ project that checks the C++ standard rather than setting it.
 You need CMake 3.30 or later, Ninja, git, and a C and C++ compiler with C++20.
 Configuring fetches the stdexec commits in the table above with git.
 
+With Nix, `nix develop` in the repository's root gives you CMake and Ninja.
+On macOS that shell adds no compiler, so the presets use Apple's; on Linux it
+adds GCC and Clang. `nix develop .#stdexec` is instead the shell I work on
+stdexec in, from [my devshells](https://github.com/ispeters/devshells), with
+Clang 23 and its own libc++. The `appleclang` presets use that Clang there,
+because they call whatever `c++` is on the `PATH`.
+
 ```sh
 cmake --list-presets                         # what this machine can use
 cmake --workflow --preset appleclang-debug   # configure, build and test

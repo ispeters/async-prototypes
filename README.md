@@ -22,6 +22,7 @@ way; see [Building](#building).
 | `sp-stack/` | The machine stack as the async stack, measured against `kv-handle`'s cursor | none |
 | `kv-dest/` | Ten ways of telling a callee where each completion's payload goes (W-157) | none |
 | `tony/` | stdexec algorithms in C++26 beside a C++29 strawman, in Tony Tables | 30acdb0 |
+| `typed-handle/` | Typed operation handles (`operation_handle<R, Sig>`, with `start_t()` for starting) beside the erased one, in four modes | none |
 
 Where a README names a file under `synthesis/` or `function-coroutines/`, that
 file is a design note in the Claude project, not in this repository.

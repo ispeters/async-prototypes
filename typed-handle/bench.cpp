@@ -2,8 +2,10 @@
 //
 //   bench SCENARIO N
 //
-// runs SCENARIO N times (for `repeat`, once, with N iterations). cg.sh runs
-// each twice under Callgrind and reports the difference per run.
+// runs SCENARIO N times (for `repeat` and `repeat_checked`, once, with N
+// iterations). cg.sh runs each twice under Callgrind and reports the
+// difference per run. The `_checked` scenarios differ from their namesakes
+// only in a leaf that asks a stop token, which the root provides.
 #include "algos.hpp"
 
 #include <cstdio>
@@ -47,6 +49,53 @@ volatile int sink;
            [](auto& st) { sink = *st.value; });
 }
 
+// The same, with a leaf that asks the stop token. `live` is never stopped.
+inplace_stop_source live;
+
+[[gnu::noinline]] void chain4_checked(int x) {
+  auto inc = [](int v) noexcept { return v + 1; };
+  run_root(then(then(then(then(just_unless_stopped(x), inc), inc), inc), inc),
+           [](auto& st) { sink = *st.value; }, live.get_token());
+}
+
+// The leaf asks, but the root has no stop token.
+[[gnu::noinline]] void chain4_unstoppable(int x) {
+  auto inc = [](int v) noexcept { return v + 1; };
+  run_root(then(then(then(then(just_unless_stopped(x), inc), inc), inc), inc),
+           [](auto& st) { sink = *st.value; });
+}
+
+// when_all under a stoppable parent, with leaves that don't ask: only the
+// forwarding callback's registration differs from `both`.
+[[gnu::noinline]] void both_live(int x) {
+  auto inc = [](int v) noexcept { return v + 1; };
+  run_root(when_all(then(just(x), inc), then(just(x), inc)),
+           [](auto& st) { sink = (*st.value).first + (*st.value).second; },
+           live.get_token());
+}
+
+[[gnu::noinline]] void both_checked(int x) {
+  auto inc = [](int v) noexcept { return v + 1; };
+  run_root(when_all(then(just_unless_stopped(x), inc),
+                    then(just_unless_stopped(x), inc)),
+           [](auto& st) { sink = (*st.value).first + (*st.value).second; },
+           live.get_token());
+}
+
+[[gnu::noinline]] void boundary_checked(int x) {
+  auto inc = [](int v) noexcept { return v + 1; };
+  run_root(then(erase_boundary(then(just_unless_stopped(x), inc)), inc),
+           [](auto& st) { sink = *st.value; }, live.get_token());
+}
+
+[[gnu::noinline]] void repeat_checked(int n) {
+  int count = 0;
+  run_root(repeat_until(then(just_unless_stopped(&count),
+                             [n](int* c) noexcept { return ++*c >= n; })),
+           [](auto&) {}, live.get_token());
+  sink = count;
+}
+
 [[gnu::noinline]] void repeat(int n) {
   int count = 0;
   run_root(repeat_until(then(just(&count),
@@ -62,8 +111,8 @@ int main(int argc, char** argv) {
   }
   int n = std::atoi(argv[2]);
   char const* s = argv[1];
-  if (!std::strcmp(s, "repeat")) {
-    repeat(n);
+  if (!std::strcmp(s, "repeat") || !std::strcmp(s, "repeat_checked")) {
+    (!std::strcmp(s, "repeat") ? repeat : repeat_checked)(n);
     return sink == n ? 0 : 1;
   }
   void (*f)(int) = !std::strcmp(s, "chain4")            ? chain4
@@ -71,6 +120,11 @@ int main(int argc, char** argv) {
                    : !std::strcmp(s, "let")             ? let
                    : !std::strcmp(s, "both")            ? both
                    : !std::strcmp(s, "boundary")        ? boundary
+                   : !std::strcmp(s, "chain4_checked")  ? chain4_checked
+                   : !std::strcmp(s, "chain4_unstoppable") ? chain4_unstoppable
+                   : !std::strcmp(s, "both_live")       ? both_live
+                   : !std::strcmp(s, "both_checked")    ? both_checked
+                   : !std::strcmp(s, "boundary_checked") ? boundary_checked
                                                         : nullptr;
   if (!f) {
     std::fprintf(stderr, "unknown scenario %s\n", s);

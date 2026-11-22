@@ -20,7 +20,13 @@ foreach(mode 0 1 2 3)
         PRIVATE TH_MODE=${mode}
     )
     # A short run of every scenario, which fails if one gets a wrong answer.
-    foreach(scenario chain4 chain4_throwing let both boundary repeat)
+    foreach(
+        scenario
+        chain4 chain4_throwing let both boundary repeat
+        chain4_unstoppable chain4_checked both_live both_checked
+        boundary_checked
+        repeat_checked
+    )
         add_test(
             NAME typed_handle.bench.${mode}.${scenario}
             COMMAND async_prototypes.typed_handle.bench.${mode} ${scenario} 100

@@ -89,6 +89,63 @@ int main() {
     run_root(then(erase_boundary(then(just(1), inc)), inc),
              [](auto& st) { CHECK(*st.value == 3); });
   }
+  // Stop tokens.
+  {
+    inplace_stop_source live;
+    run_root(then(just_unless_stopped(1), inc),
+             [](auto& st) { CHECK(*st.value == 2); }, live.get_token());
+    inplace_stop_source stopped;
+    stopped.request_stop();
+    run_root(then(just_unless_stopped(1), inc),
+             [](auto& st) { CHECK(st.stopped && !st.value.has_value()); },
+             stopped.get_token());
+    // no token at all: just_unless_stopped is just
+    run_root(then(just_unless_stopped(1), inc),
+             [](auto& st) { CHECK(*st.value == 2); });
+  }
+  {  // a child's failure stops its sibling, through when_all's own source
+    bool ran = false;
+    auto boom = [](int) -> int { throw 1; };
+    run_root(when_all(then(just(1), boom),
+                      then(just_unless_stopped(2),
+                           [&ran](int x) noexcept {
+                             ran = true;
+                             return x;
+                           })),
+             [](auto& st) { CHECK(st.error.has_value()); });
+    CHECK(!ran);
+  }
+  {  // the parent's stop reaches when_all's children, through a callback
+    inplace_stop_source stopped;
+    stopped.request_stop();
+    run_root(when_all(just_unless_stopped(1), just_unless_stopped(2)),
+             [](auto& st) { CHECK(st.stopped); }, stopped.get_token());
+    inplace_stop_source live;  // registered, then deregistered
+    run_root(when_all(just_unless_stopped(1), just_unless_stopped(2)),
+             [](auto& st) { CHECK((*st.value).first == 1); }, live.get_token());
+    CHECK(!live.stop_requested());
+  }
+  {  // through an erased boundary, by its one forwarded query
+    inplace_stop_source stopped;
+    stopped.request_stop();
+    run_root(then(erase_boundary(then(just_unless_stopped(1), inc)), inc),
+             [](auto& st) { CHECK(st.stopped); }, stopped.get_token());
+    inplace_stop_source live;
+    run_root(then(erase_boundary(then(just_unless_stopped(1), inc)), inc),
+             [](auto& st) { CHECK(*st.value == 3); }, live.get_token());
+  }
+  {  // a loop stopped from inside its body
+    inplace_stop_source src;
+    int count = 0;
+    run_root(repeat_until(then(just_unless_stopped(&count),
+                               [&src](int* c) noexcept {
+                                 if (++*c == 5) src.request_stop();
+                                 return false;
+                               })),
+             [](auto& st) { CHECK(st.stopped); }, src.get_token());
+    CHECK(count == 5);
+  }
+
   // repeat_until: count to N, measuring the stack from inside the body.
   long extent[2] = {};
   for (int i = 0; int n : {10, 1000}) {

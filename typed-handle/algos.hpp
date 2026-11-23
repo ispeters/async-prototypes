@@ -73,7 +73,7 @@ struct just_unless_stopped_sender {
       } else {
         return either(
             get_stop_token(th::get_env(rcvr)).stop_requested(),
-            [&] { return later<set_stopped_t()>(rcvr); },
+            [&] { return th::set_stopped(rcvr); },
             [&] { return th::set_value(rcvr, std::move(value)); });
       }
     }

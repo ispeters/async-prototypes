@@ -10,6 +10,7 @@
 // another, and a callback being run can't be deregistered from another
 // thread. Nothing here stops from another thread.
 #pragma once
+#include "handle.hpp"
 
 #include <atomic>
 #include <utility>

@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: MIT
 
+# stdexec provides the completion_signatures machinery, nothing else.
+async_prototypes_stdexec(30acdb0)
+
 # One program per mode: EAGER (0), ERASED (1), TYPED (2), VARIANT (3).
 foreach(mode 0 1 2 3)
     add_executable(async_prototypes.typed_handle.checks.${mode})
@@ -7,6 +10,10 @@ foreach(mode 0 1 2 3)
     target_compile_definitions(
         async_prototypes.typed_handle.checks.${mode}
         PRIVATE TH_MODE=${mode}
+    )
+    target_link_libraries(
+        async_prototypes.typed_handle.checks.${mode}
+        PRIVATE async_prototypes.stdexec.30acdb0
     )
     add_test(
         NAME typed_handle.checks.${mode}
@@ -18,6 +25,10 @@ foreach(mode 0 1 2 3)
     target_compile_definitions(
         async_prototypes.typed_handle.bench.${mode}
         PRIVATE TH_MODE=${mode}
+    )
+    target_link_libraries(
+        async_prototypes.typed_handle.bench.${mode}
+        PRIVATE async_prototypes.stdexec.30acdb0
     )
     # A short run of every scenario, which fails if one gets a wrong answer.
     foreach(
@@ -43,11 +54,16 @@ foreach(mode 1 2 3)
         async_prototypes.typed_handle.deduced.${mode}
         PRIVATE TH_MODE=${mode} TH_DEDUCE_AGAIN
     )
+    target_link_libraries(
+        async_prototypes.typed_handle.deduced.${mode}
+        PRIVATE async_prototypes.stdexec.30acdb0
+    )
 endforeach()
 beman_add_xfail_compile_test(
     typed_handle.deduced.0
     SOURCE checks.cpp
     EXPECT "before deduction of [^a ]*auto|deduced return type cannot be used before it is defined"
     COMPILE_DEFINITIONS TH_MODE=0 TH_DEDUCE_AGAIN
+    LINK_LIBRARIES async_prototypes.stdexec.30acdb0
     TARGET_PREFIX async_prototypes.xfail.
 )

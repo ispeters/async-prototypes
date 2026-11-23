@@ -20,7 +20,7 @@ volatile int sink;
 [[gnu::noinline]] void chain4(int x) {
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(then(then(then(then(just(x), inc), inc), inc), inc),
-           [](auto& st) { sink = *st.value; });
+           [](auto& st) { sink = st.template get<set_value_t(int)>(); });
 }
 
 [[gnu::noinline]] void chain4_throwing(int x) {
@@ -29,24 +29,25 @@ volatile int sink;
     return v + 1;
   };
   run_root(then(then(then(then(just(x), inc), inc), inc), inc),
-           [](auto& st) { sink = *st.value; });
+           [](auto& st) { sink = st.template get<set_value_t(int)>(); });
 }
 
 [[gnu::noinline]] void let(int x) {
   run_root(let_value(just(x), [](int& v) noexcept { return just(v + 1); }),
-           [](auto& st) { sink = *st.value; });
+           [](auto& st) { sink = st.template get<set_value_t(int)>(); });
 }
 
 [[gnu::noinline]] void both(int x) {
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(when_all(then(just(x), inc), then(just(x), inc)),
-           [](auto& st) { sink = (*st.value).first + (*st.value).second; });
+           [](auto& st) { auto& v = st.template get<set_value_t(int, int)>();
+             sink = v.template get<0>() + v.template get<1>(); });
 }
 
 [[gnu::noinline]] void boundary(int x) {
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(then(erase_boundary(then(just(x), inc)), inc),
-           [](auto& st) { sink = *st.value; });
+           [](auto& st) { sink = st.template get<set_value_t(int)>(); });
 }
 
 // The same, with a leaf that asks the stop token. `live` is never stopped.
@@ -55,14 +56,14 @@ inplace_stop_source live;
 [[gnu::noinline]] void chain4_checked(int x) {
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(then(then(then(then(just_unless_stopped(x), inc), inc), inc), inc),
-           [](auto& st) { sink = *st.value; }, live.get_token());
+           [](auto& st) { sink = st.template get<set_value_t(int)>(); }, live.get_token());
 }
 
 // The leaf asks, but the root has no stop token.
 [[gnu::noinline]] void chain4_unstoppable(int x) {
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(then(then(then(then(just_unless_stopped(x), inc), inc), inc), inc),
-           [](auto& st) { sink = *st.value; });
+           [](auto& st) { sink = st.template get<set_value_t(int)>(); });
 }
 
 // when_all under a stoppable parent, with leaves that don't ask: only the
@@ -70,7 +71,8 @@ inplace_stop_source live;
 [[gnu::noinline]] void both_live(int x) {
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(when_all(then(just(x), inc), then(just(x), inc)),
-           [](auto& st) { sink = (*st.value).first + (*st.value).second; },
+           [](auto& st) { auto& v = st.template get<set_value_t(int, int)>();
+             sink = v.template get<0>() + v.template get<1>(); },
            live.get_token());
 }
 
@@ -78,14 +80,15 @@ inplace_stop_source live;
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(when_all(then(just_unless_stopped(x), inc),
                     then(just_unless_stopped(x), inc)),
-           [](auto& st) { sink = (*st.value).first + (*st.value).second; },
+           [](auto& st) { auto& v = st.template get<set_value_t(int, int)>();
+             sink = v.template get<0>() + v.template get<1>(); },
            live.get_token());
 }
 
 [[gnu::noinline]] void boundary_checked(int x) {
   auto inc = [](int v) noexcept { return v + 1; };
   run_root(then(erase_boundary(then(just_unless_stopped(x), inc)), inc),
-           [](auto& st) { sink = *st.value; }, live.get_token());
+           [](auto& st) { sink = st.template get<set_value_t(int)>(); }, live.get_token());
 }
 
 [[gnu::noinline]] void repeat_checked(int n) {

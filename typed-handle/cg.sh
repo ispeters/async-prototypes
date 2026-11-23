@@ -5,10 +5,14 @@
 #
 #   ./cg.sh [CXX [N]]      e.g. ./cg.sh g++ 1000
 #   SCENARIOS="let both" ./cg.sh    only these
+#
+# STDEXEC is stdexec's include directory at the pinned commit (30acdb0);
+# by default, the copy a CMake preset fetched under build/.
 set -eu
 CXX=${1:-g++}
 N=${2:-1000}
 DIR=$(cd "$(dirname "$0")" && pwd)
+STDEXEC=${STDEXEC:-$(ls -d "$DIR"/../build/*/_deps/stdexec_30acdb0-src/include | head -1)}
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 
@@ -20,7 +24,7 @@ totals() {  # Ir Bi from a Callgrind output file
 printf '%-8s %-16s %10s %6s\n' mode scenario Ir/run Bi/run
 for mode in 0 1 2 3; do
   name=$(echo EAGER ERASED TYPED VARIANT | cut -d' ' -f$((mode + 1)))
-  "$CXX" -std=c++23 -O2 -DNDEBUG -static -DTH_MODE=$mode \
+  "$CXX" -std=c++23 -O2 -DNDEBUG -static -DTH_MODE=$mode -isystem "$STDEXEC" \
     "$DIR/bench.cpp" -o "$OUT/bench$mode"
   for s in ${SCENARIOS:-chain4 chain4_throwing let both boundary repeat chain4_unstoppable chain4_checked both_live both_checked boundary_checked repeat_checked}; do
     for k in 1 3; do

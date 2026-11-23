@@ -459,12 +459,24 @@ TH_INLINE auto start(Op& op) noexcept {
   return op.start();
 }
 
-// Construct a value at the receiver's destination, then complete.
+// Originating a completion: construct its payload, if it has one, at the
+// receiver's destination, then deliver it. Forwarding a completion whose
+// payload a child already constructed is later<Sig>(rcvr) alone.
 template <class R, class A>
 TH_INLINE auto set_value(R& rcvr, A&& a) noexcept {
   using T = std::decay_t<A>;
   ::new (rcvr.template destination<set_value_t(T)>()) T(std::forward<A>(a));
   return later<set_value_t(T)>(rcvr);
+}
+template <class R, class E>
+TH_INLINE auto set_error(R& rcvr, E&& e) noexcept {
+  using T = std::decay_t<E>;
+  ::new (rcvr.template destination<set_error_t(T)>()) T(std::forward<E>(e));
+  return later<set_error_t(T)>(rcvr);
+}
+template <class R>
+TH_INLINE auto set_stopped(R& rcvr) noexcept {
+  return later<set_stopped_t()>(rcvr);
 }
 
 template <class S, class R>

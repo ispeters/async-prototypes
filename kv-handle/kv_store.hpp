@@ -4,9 +4,10 @@
 
 #include "handle.hpp"
 
-using get_fn = async_fn<value_t(str) const&>; // P4223R2's `function`
-using hget_fn =
-    hfn<value_t(str) const&>; // `function` with a `start` that returns a handle
+// P4223R2's `function`
+using get_fn = async_fn<value_t(str) const&>;
+// `function` with a `start` that returns a handle
+using hget_fn = hfn<value_t(str) const&>;
 
 // Today: P4223R2's declaration.
 struct kv_store {

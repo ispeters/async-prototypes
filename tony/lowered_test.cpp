@@ -90,22 +90,22 @@ int main() {
     for (bool deferred : {false, true}) {
         backing.deferred = deferred;
         c.entries_.m.clear();
-        {
+        { // miss
             root r;
             get(c, "a", r);
             CHECK(r.how == VALUE && **r.value == "apple");
-        } // miss
+        }
         CHECK(c.entries_.m.count("a"));
-        {
+        { // hit
             root r;
             get(c, "a", r);
             CHECK(r.how == VALUE && **r.value == "apple");
-        } // hit
-        {
+        }
+        { // absent
             root r;
             get(c, "zz", r);
             CHECK(r.how == VALUE && !*r.value);
-        } // absent
+        }
         {
             root r;
             get(c, "bad", r);

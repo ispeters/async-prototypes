@@ -310,10 +310,11 @@ struct let_value_op {
 
     operation_handle next() noexcept {
         try {
+            // destroys the first child
             auto& second = ops.template emplace<1>(emplace_from{[&] {
                 return execution::connect(std::invoke(std::move(f), *value),
                                           rcvr2_t{this});
-            }}); // destroys the first child
+            }});
             return execution::start(second);
         } catch (...) {
             ::new (rcvr.template destination<set_error_t(exception_ptr)>())
@@ -422,8 +423,9 @@ struct when_all_op {
         if (state.load() == none) {
             return rcvr.template complete<set_value_t(Vs)>();
         }
+        // abandon the results
         if (constructed[0])
-            results->first.~V1(); // abandon the results
+            results->first.~V1();
         if (constructed[1])
             results->second.~V2();
         if (state.load() == stopped) {

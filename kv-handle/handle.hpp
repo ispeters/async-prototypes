@@ -223,7 +223,8 @@ cxx26_sender<std::decay_t<S>> as_cxx26(S&& snd) {
 // Declared and constructed as P4223's is:
 //
 //   hfn<value_t(str) const&> get(str key) const {
-//     return {*this, std::move(key), [](store const& self, str key) { return <sender>;
+//     return {*this, std::move(key), [](store const& self, str key) {
+//       return <sender>;
 //     }};
 //   }
 //

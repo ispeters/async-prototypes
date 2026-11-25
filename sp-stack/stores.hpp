@@ -82,6 +82,6 @@ async_next count_all_c(const kv_store_v&  s,
                        async_sp           sp) noexcept;
 
 // Statistics.
-extern std::size_t
-    machine_frame_bytes[3]; // mem, cache, count_found: sizeof the hand-written record
+// mem, cache, count_found: sizeof the hand-written record
+extern std::size_t machine_frame_bytes[3];
 extern std::size_t cursor_frame_bytes[3];

@@ -58,8 +58,8 @@ union own_err {
 template <class V, class Up>
 [[gnu::always_inline]] inline typename V::handle
 get_now(const mem_data& self, const str& key, Up up) noexcept {
-    ::new (up.template dest<VAL>())
-        value_t(self.find(key)); // co_return of a prvalue, in place
+    // co_return of a prvalue, in place
+    ::new (up.template dest<VAL>()) value_t(self.find(key));
     return V::template complete<VAL>(up.k);
 }
 
@@ -132,9 +132,10 @@ struct cache_frame : V::rec {
     link<V, value_t> up;
     cache_entries*   entries;
     str*             key;
+    // the callee's parameter object: a temporary of the full-expression
     union {
         str arg;
-    }; // the callee's parameter object: a temporary of the full-expression
+    };
     cache_frame() noexcept {}
     ~cache_frame() {}
 
@@ -198,14 +199,15 @@ template <class V, class Up, class T, class Fb>
 struct filter_frame : V::rec {
     Up        up;
     const Fb* fb;
+    // the callee's parameter object
     union {
         str arg;
-    }; // the callee's parameter object
+    };
     // what the middle keeps of its own: in row 1 the child's whole slot (the
     // value has to be moved out of it); elsewhere room for the error alone
     std::conditional_t<V::row == 1, slot<T>, own_err> own;
-    [[no_unique_address]] std::conditional_t<by_table<V>, ptab, none_t>
-        tab; // the child's table
+    // the child's table
+    [[no_unique_address]] std::conditional_t<by_table<V>, ptab, none_t> tab;
     filter_frame() noexcept {}
     ~filter_frame() {}
 
@@ -268,8 +270,8 @@ filter_body(Up up, const Fb& fb, const str& key, Child child, async_sp sp) noexc
 // A middle that observes and passes everything through (W4):
 //
 //   str pass::get_or(str key, str fallback) {
-//     auto r = co_await next_->get_or(std::move(key), std::move(fallback));  // as a
-//     scope_exit
+//     // as a scope_exit
+//     auto r = co_await next_->get_or(std::move(key), std::move(fallback));
 //     ++count_;
 //     co_return r;
 //   }

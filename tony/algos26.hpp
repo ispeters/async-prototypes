@@ -276,10 +276,11 @@ struct let_value_op {
     void next(A&& a) noexcept {
         try {
             value.emplace(std::forward<A>(a)); // a may refer into the first child
+            // destroys the first child
             auto& second = ops.template emplace<1>(emplace_from{[&] {
                 return execution::connect(std::invoke(std::move(f), *value),
                                           rcvr2_t{this});
-            }}); // destroys the first child
+            }});
             execution::start(second);
         } catch (...) {
             execution::set_error(std::move(rcvr), std::current_exception());

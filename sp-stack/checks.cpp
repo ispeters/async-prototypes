@@ -87,8 +87,8 @@ int main() {
                         CHECK(fork_machine(
                                   *s.machine, keys.data(), keys.size(), *p, stk) == want);
             }
-        CHECK(pooled.mapped ==
-              200); // the second and later forks reuse the first's stacks
+        // the second and later forks reuse the first's stacks
+        CHECK(pooled.mapped == 200);
         // with a scribbling parent in every child
         stores s          = make_stores(false, true);
         ms::after_pending = &scribble;

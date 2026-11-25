@@ -230,8 +230,8 @@ struct cache_l final : kv_store {
             using receiver_concept = ex::receiver_tag;
             op*  o;
             void set_value(value_t&& v) && noexcept {
-                ::new (&o->value)
-                    value_t(std::move(v)); // the await's result becomes `value`
+                // the await's result becomes `value`
+                ::new (&o->value) value_t(std::move(v));
                 if (tl_starting.op == o)
                     *tl_starting.how = ASYNC_VALUE;
                 else
@@ -257,13 +257,16 @@ struct cache_l final : kv_store {
 
         R              rcvr;
         const cache_l* self;
-        str            key; // parameter: destroyed with the operation state
+        // parameter: destroyed with the operation state
+        str key;
+        // local, alive from the await to the co_return
         union {
             value_t value;
-        }; // local, alive from the await to the co_return
+        };
+        // the awaited operation, alive while outstanding
         union {
             child_t child;
-        }; // the awaited operation, alive while outstanding
+        };
 
         op(R r, const cache_l* s, str k)
             : rcvr(std::move(r)), self(s), key(std::move(k)) {}
@@ -397,9 +400,9 @@ struct await_get<kv_store_h> { // make the sender, connect it, start it
     }
 };
 
+// a C++26 sender: the thunk connects it in a frame of its own
 template <>
-struct await_get<kv_store> { // a C++26 sender: the thunk connects it in a frame of its
-                             // own
+struct await_get<kv_store> {
     struct temp {};
     static void       make(temp*, const kv_store&, const str&) {}
     static async_next start(const kv_store& b,

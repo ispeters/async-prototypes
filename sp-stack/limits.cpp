@@ -170,8 +170,9 @@ static int overflow_arena() {
 // ---- depths: how deep ordinary synchronous callees go -------------------------
 template <class F>
 static void depth_of(const char* what, ms::stack stk, F&& f) {
-    f(); // once on the thread's stack first, so lazy binding and first-use setup aren't
-         // counted
+    // once on the thread's stack first, so lazy binding and first-use setup
+    // aren't counted
+    f();
     ms::fill(stk);
     root_m k(stk.top());
     ms::enter(stk.top(), &k, [&] [[gnu::always_inline]] () noexcept {

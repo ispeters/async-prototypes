@@ -95,9 +95,10 @@ struct cache_frame_v : async_cont {
     str*           key;
     slot<value_t>* out;
     async_cont*    k;
+    // the callee's parameter object
     union {
         str t;
-    }; // the callee's parameter object
+    };
     cache_frame_v() noexcept {}
     ~cache_frame_v() {}
 
@@ -270,9 +271,10 @@ struct count_frame : Cont {
     std::size_t        total;
     slot<std::size_t>* out;
     Cont*              k;
+    // the callee's parameter object, for one iteration
     union {
         str arg;
-    }; // the callee's parameter object, for one iteration
+    };
     slot<value_t> v; // the await's result, for one iteration
     count_frame() noexcept {}
     ~count_frame() {}

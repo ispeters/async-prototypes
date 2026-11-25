@@ -1,6 +1,7 @@
-// Build: g++ -std=c++20 -DCASE=1 -I<stdexec>/include added_error.cpp (CASE=0: no
-// upon_error) Mimics nvexec's stream_domain rewriting schedule_from: the rewritten sender
-// declares an extra error that the original need not declare.
+// Build: g++ -std=c++20 -DCASE=1 -I<stdexec>/include added_error.cpp
+//        (CASE=0: no upon_error)
+// Mimics nvexec's stream_domain rewriting schedule_from: the rewritten
+// sender declares an extra error that the original need not declare.
 #include <exec/completion_signatures.hpp>
 #include <exec/sender_for.hpp>
 

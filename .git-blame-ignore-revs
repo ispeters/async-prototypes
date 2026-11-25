@@ -1,0 +1,9 @@
+# Commits that `git blame` should skip, such as mechanical reformatting.
+# GitHub's blame view reads this file automatically. For local blames, run
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# once in your clone.
+
+# Clang format (#2)
+7badee59ef974e4b223e014d96b5ef8c9c64491d

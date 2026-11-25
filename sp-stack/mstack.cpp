@@ -1,9 +1,10 @@
 #include "mstack.hpp"
 
-#include <cstdlib>
-#include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
+
+#include <cstdlib>
+#include <cstring>
 
 // Both switches save the callee-saved registers on the stack they were called
 // on, keep that stack's pointer in rbp, and restore from it. rbp survives
@@ -90,87 +91,101 @@ namespace ms {
 
 static_assert(offsetof(cont, resume) == 0 && offsetof(cont, sp) == 8);
 
-void* lowest_deferred_sp = nullptr;
+void* lowest_deferred_sp         = nullptr;
 void (*after_pending)() noexcept = nullptr;
 
-static cont* head;
+static cont*  head;
 static cont** tail = &head;
 
 void defer(cont* k) noexcept {
-  if (!lowest_deferred_sp || k->sp < lowest_deferred_sp) lowest_deferred_sp = k->sp;
-  k->link = nullptr;
-  *tail = k;
-  tail = &k->link;
+    if (!lowest_deferred_sp || k->sp < lowest_deferred_sp)
+        lowest_deferred_sp = k->sp;
+    k->link = nullptr;
+    *tail   = k;
+    tail    = &k->link;
 }
 
 int run_pending() noexcept {
-  int n = 0;
-  while (head) {
-    cont* k = head;
-    head = k->link;
-    if (!head) tail = &head;
-    ms_run(k, ASYNC_VALUE);
-    ++n;
-  }
-  return n;
+    int n = 0;
+    while (head) {
+        cont* k = head;
+        head    = k->link;
+        if (!head)
+            tail = &head;
+        ms_run(k, ASYNC_VALUE);
+        ++n;
+    }
+    return n;
 }
 
 // ---- providers -------------------------------------------------------------
 static std::size_t page() noexcept {
-  static std::size_t p = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
-  return p;
+    static std::size_t p = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+    return p;
 }
 
 stack mmap_provider::map(std::size_t size) noexcept {
-  std::size_t g = page();
-  void* p = mmap(nullptr, size + g, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK | MAP_NORESERVE, -1, 0);
-  if (p == MAP_FAILED) return {};
-  if (mprotect(static_cast<char*>(p) + g, size, PROT_READ | PROT_WRITE) != 0) {
-    munmap(p, size + g);
-    return {};
-  }
-  return {static_cast<char*>(p) + g, size};
+    std::size_t g = page();
+    void*       p = mmap(nullptr,
+                         size + g,
+                         PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK | MAP_NORESERVE,
+                         -1,
+                         0);
+    if (p == MAP_FAILED)
+        return {};
+    if (mprotect(static_cast<char*>(p) + g, size, PROT_READ | PROT_WRITE) != 0) {
+        munmap(p, size + g);
+        return {};
+    }
+    return {static_cast<char*>(p) + g, size};
 }
 
 void mmap_provider::unmap(stack s) noexcept { munmap(s.base - page(), s.size + page()); }
 
 stack mmap_provider::acquire() noexcept {
-  if (pooled && !free_.empty()) {
-    stack s = free_.back();
-    free_.pop_back();
+    if (pooled && !free_.empty()) {
+        stack s = free_.back();
+        free_.pop_back();
+        return s;
+    }
+    stack s = map(size);
+    if (!s.base)
+        std::abort();
+    ++mapped;
     return s;
-  }
-  stack s = map(size);
-  if (!s.base) std::abort();
-  ++mapped;
-  return s;
 }
 
 void mmap_provider::release(stack s) noexcept {
-  if (pooled) free_.push_back(s);
-  else unmap(s);
+    if (pooled)
+        free_.push_back(s);
+    else
+        unmap(s);
 }
 
 mmap_provider::~mmap_provider() {
-  for (stack s : free_) unmap(s);
+    for (stack s : free_)
+        unmap(s);
 }
 
 stack arena_provider::acquire() noexcept {
-  if (!free_.empty()) {
-    stack s = free_.back();
-    free_.pop_back();
-    return s;
-  }
-  if (next_ == count) std::abort();
-  return {buf + chunk * next_++, chunk};
+    if (!free_.empty()) {
+        stack s = free_.back();
+        free_.pop_back();
+        return s;
+    }
+    if (next_ == count)
+        std::abort();
+    return {buf + chunk * next_++, chunk};
 }
 
 void fill(stack s) noexcept { std::memset(s.base, 0xA5, s.size); }
 
 std::size_t high_water(stack s) noexcept {
-  std::size_t i = 0;
-  while (i < s.size && static_cast<unsigned char>(s.base[i]) == 0xA5) ++i;
-  return s.size - i;
+    std::size_t i = 0;
+    while (i < s.size && static_cast<unsigned char>(s.base[i]) == 0xA5)
+        ++i;
+    return s.size - i;
 }
 
-}  // namespace ms
+} // namespace ms

@@ -11,15 +11,15 @@
 #include "mstack.hpp"
 
 struct node {
-  node const* left;
-  node const* right;
-  long value;
+    const node* left;
+    const node* right;
+    long        value;
 };
 
-extern bool walk_leaves_suspend;  // a null child completes from the event loop
+extern bool walk_leaves_suspend; // a null child completes from the event loop
 
-long walk_sync(node const* t);
-async_next walk_c(node const* t, long* out, async_cont* k, async_sp sp) noexcept;
-ms::next walk_m(node const* t, long* out, ms::cont* k) noexcept;
+long       walk_sync(const node* t);
+async_next walk_c(const node* t, long* out, async_cont* k, async_sp sp) noexcept;
+ms::next   walk_m(const node* t, long* out, ms::cont* k) noexcept;
 
-extern std::size_t walk_frame_bytes[2];  // cursor, machine: sizeof the hand-written record
+extern std::size_t walk_frame_bytes[2]; // cursor, machine: sizeof the hand-written record

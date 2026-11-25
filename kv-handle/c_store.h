@@ -19,33 +19,39 @@ extern "C" {
 #endif
 
 typedef struct c_store c_store;
-c_store* c_store_open(void);
+c_store*               c_store_open(void);
 
 typedef struct c_value {
-  const char* data; /* NULL when the key is absent */
-  size_t len;
+    const char* data; /* NULL when the key is absent */
+    size_t      len;
 } c_value;
 
 /* One member per declared completion that has a payload. */
 typedef union c_get_slot {
-  c_value value;
-  int error;
+    c_value value;
+    int     error;
 } c_get_slot;
 
 typedef union c_len_slot {
-  size_t value;
-  int error;
+    size_t value;
+    int    error;
 } c_len_slot;
 
 /* Looks key up. Completes from the event loop, never inline. An empty key is
  * an error (EINVAL), reported inline. */
-async_next c_store_get_entry(const c_store* store, const char* key, c_get_slot* out, async_cont* k,
-                             async_sp sp) ASYNC_NOEXCEPT;
+async_next c_store_get_entry(const c_store* store,
+                             const char*    key,
+                             c_get_slot*    out,
+                             async_cont*    k,
+                             async_sp       sp) ASYNC_NOEXCEPT;
 
 /* Awaits c_store_get and completes with the value's length, or 0 if absent.
  * An asynchronous function that calls another, written in C. */
-async_next c_store_get_len_entry(const c_store* store, const char* key, c_len_slot* out, async_cont* k,
-                                 async_sp sp) ASYNC_NOEXCEPT;
+async_next c_store_get_len_entry(const c_store* store,
+                                 const char*    key,
+                                 c_len_slot*    out,
+                                 async_cont*    k,
+                                 async_sp       sp) ASYNC_NOEXCEPT;
 
 #ifdef __cplusplus
 }

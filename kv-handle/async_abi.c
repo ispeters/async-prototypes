@@ -17,8 +17,9 @@ int async_run_pending(void) {
     while (head) {
         async_task* t = head;
         head          = t->next;
-        if (!head)
+        if (!head) {
             tail = &head;
+        }
         async_run(t->run(t));
         ++n;
     }

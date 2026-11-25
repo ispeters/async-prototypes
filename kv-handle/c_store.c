@@ -88,10 +88,11 @@ typedef struct len_frame {
 static async_next len_after_await(async_cont* c, int how) {
     len_frame*  f = (len_frame*)c;
     async_cont* k = f->k;
-    if (how == ASYNC_VALUE)
+    if (how == ASYNC_VALUE) {
         f->out->value = f->v.value.len;
-    else if (how == ASYNC_ERROR)
+    } else if (how == ASYNC_ERROR) {
         f->out->error = f->v.error; /* forwarded */
+    }
     async_sp top;
     async_pop(&top, f);
     return completed(k, how);
@@ -105,7 +106,8 @@ async_next c_store_get_len_entry(
     f->out         = out;
     f->k           = k;
     async_next n   = c_store_get_entry(store, key, &f->v, &f->cont, top);
-    if (n.next == &f->cont)
+    if (n.next == &f->cont) {
         return len_after_await(&f->cont, n.how); /* handed our own record */
+    }
     return n;
 }

@@ -11,8 +11,9 @@ struct mem_data {
     std::map<str, str> data;
     bool               deferred;
     value_t            find(const str& key) const {
-        if (auto it = data.find(key); it != data.end())
+        if (auto it = data.find(key); it != data.end()) {
             return it->second;
+        }
         return std::nullopt;
     }
 };
@@ -30,8 +31,9 @@ struct maybe_defer {
         op(R r, bool d) : rcvr(std::move(r)), deferred(d) {}
         op(op&&) = delete;
         void start() & noexcept {
-            if (!deferred)
+            if (!deferred) {
                 return ex::set_value(std::move(rcvr));
+            }
             run = [](async_task* t) noexcept -> async_next {
                 ex::set_value(std::move(static_cast<op*>(t)->rcvr));
                 return {nullptr, ASYNC_PENDING};
@@ -96,11 +98,13 @@ struct cache_p final : kv_store {
     // The synchronous function the asynchronous ones parallel.
     value_t get_sync(str key) const override {
         if constexpr (requires { backing_->get_sync(key); }) {
-            if (auto hit = entries_.find(key))
+            if (auto hit = entries_.find(key)) {
                 return hit;
+            }
             auto value = backing_->get_sync(key);
-            if (value)
+            if (value) {
                 entries_.insert(key, *value);
+            }
             return value;
         } else {
             std::abort();
@@ -188,8 +192,9 @@ struct mem_get_sender {
             : rcvr(std::move(r)), self(s), key(std::move(k)) {}
         op(op&&) = delete;
         void start() & noexcept {
-            if (!self->deferred)
+            if (!self->deferred) {
                 return finish();
+            }
             run = [](async_task* t) noexcept -> async_next {
                 static_cast<op*>(t)->finish();
                 return {nullptr, ASYNC_PENDING};
@@ -232,22 +237,25 @@ struct cache_l final : kv_store {
             void set_value(value_t&& v) && noexcept {
                 // the await's result becomes `value`
                 ::new (&o->value) value_t(std::move(v));
-                if (tl_starting.op == o)
+                if (tl_starting.op == o) {
                     *tl_starting.how = ASYNC_VALUE;
-                else
+                } else {
                     o->resume();
+                }
             }
             // Errors and stopped aren't handled by the body, so they're forwarded: copy
             // the payload out of the child, release the child, complete.
             void set_error(std::exception_ptr e) && noexcept {
-                if (tl_starting.op == o)
+                if (tl_starting.op == o) {
                     *tl_starting.how = ASYNC_ERROR;
+                }
                 o->child.~child_t();
                 ex::set_error(std::move(o->rcvr), std::move(e));
             }
             void set_stopped() && noexcept {
-                if (tl_starting.op == o)
+                if (tl_starting.op == o) {
                     *tl_starting.how = ASYNC_STOPPED;
+                }
                 o->child.~child_t();
                 ex::set_stopped(std::move(o->rcvr));
             }
@@ -285,15 +293,17 @@ struct cache_l final : kv_store {
             auto saved = std::exchange(tl_starting, start_guard{this, &how});
             ex::start(child);
             tl_starting = saved;
-            if (how == ASYNC_VALUE)
+            if (how == ASYNC_VALUE) {
                 resume();
+            }
             // pending: await_rcvr resumes the body later. Forwarded: nothing left to do.
         }
 
         void resume() noexcept {
             child.~child_t(); // an awaited operation is released when it completes
-            if (value)
+            if (value) {
                 self->entries_.insert(key, *value);
+            }
             // co_return value: `value` lives in this frame, which the completion may
             // destroy, so it's moved out first and destroyed with the other locals
             value_t ret(std::move(value));
@@ -434,8 +444,9 @@ struct cache_frame : async_cont {
         t.~temp(); // end of the full-expression
         if (how == ASYNC_VALUE) {
             value_t& v = out->value;
-            if (v)
+            if (v) {
                 entries->insert(*key, *v);
+            }
         }
         async_cont* up = k;
         async_sp    top;
@@ -455,8 +466,9 @@ template <class Backing>
     // `hit` is the return object: it's constructed in the caller's slot
     value_t& hit = *::new (&out->value) value_t(entries.find(key));
     // co_return hit
-    if (hit)
+    if (hit) {
         return {k, ASYNC_VALUE};
+    }
     hit.~value_t();
     async_sp top = sp;
     auto*    f   = ::new (async_push(&top, sizeof(frame))) frame;
@@ -471,8 +483,9 @@ template <class Backing>
     async_next n = await_get<Backing>::start(backing, f->t, key, out, f, top);
     // Being handed our own record means "you're next": carry on here and skip
     // the trip through the bottom of the stack.
-    if (n.next == f)
+    if (n.next == f) {
         return f->after_await(n.how);
+    }
     return n;
 }
 
@@ -632,47 +645,56 @@ stores make_stores(char cache_kind, char mem_kind, bool retain, bool deferred) {
     stores s;
     switch (cache_kind) {
     case 'p':
-        if (today)
+        if (today) {
             s.today = new cache_p<kv_store>(*today, retain);
-        else if (hidden)
+        } else if (hidden) {
             s.today = new cache_p<kv_store_h>(*hidden, retain);
+        }
         break;
     case 'l':
-        if (today)
+        if (today) {
             s.today = new cache_l(*today, retain);
+        }
         break;
     case 'n':
-        if (hidden)
+        if (hidden) {
             s.hidden = new cache_n<kv_store_h>(*hidden, retain);
-        else if (today)
+        } else if (today) {
             s.hidden = new cache_n<kv_store>(*today, retain);
+        }
         break;
     case 'o':
-        if (hidden)
+        if (hidden) {
             s.hidden = new cache_o(*hidden, retain);
+        }
         break;
     case 'w':
-        if (hidden)
+        if (hidden) {
             s.hidden = new cache_w(*hidden, retain);
+        }
         break;
     case 'v':
-        if (visible)
+        if (visible) {
             s.visible = new cache_v(*visible, retain);
+        }
         break;
     case 'a':
-        if (alloc)
+        if (alloc) {
             s.alloc = new cache_q<get_fn_alloc, kv_store_alloc>(*alloc, retain);
-        else if (hidden)
+        } else if (hidden) {
             s.alloc = new cache_q<get_fn_alloc, kv_store_h>(*hidden, retain);
+        }
         break;
     case 'c':
-        if (cursor)
+        if (cursor) {
             s.cursor = new cache_q<get_fn_cursor, kv_store_cursor>(*cursor, retain);
-        else if (hidden)
+        } else if (hidden) {
             s.cursor = new cache_q<get_fn_cursor, kv_store_h>(*hidden, retain);
+        }
         break;
     }
-    if (!s.today && !s.hidden && !s.visible && !s.alloc && !s.cursor)
+    if (!s.today && !s.hidden && !s.visible && !s.alloc && !s.cursor) {
         std::abort();
+    }
     return s;
 }

@@ -29,13 +29,15 @@ static void records(tlist<Vs...>) {
 static void counts(int v, int w, bool deferred) {
     rig_base* r = make_rig(v, w, deferred);
     // warm the cache, so the measured call is a hit
-    if (w == w_get_hit)
+    if (w == w_get_hit) {
         r->call();
+    }
     str::key_copies = str::key_moves = str::val_copies = str::val_moves = 0;
     async_high_water = sizeof(async_slab);
     std::size_t got  = r->call();
-    if (got != expected(w))
+    if (got != expected(w)) {
         std::abort();
+    }
     std::printf("%-22s| %-16s| %-8s| %ld / %ld | %ld / %ld | %zu B\n",
                 variant_name(v),
                 workload_names[w],
@@ -55,14 +57,16 @@ static void counts(int v, int w, bool deferred) {
     double      best = 1e30;
     for (int rep = 0; rep < 7; ++rep) {
         auto t0 = std::chrono::steady_clock::now();
-        for (long i = 0; i < n; ++i)
+        for (long i = 0; i < n; ++i) {
             sum += r->call();
+        }
         auto t1 = std::chrono::steady_clock::now();
         best =
             std::min(best, std::chrono::duration<double, std::nano>(t1 - t0).count() / n);
     }
-    if (sum != expected(w) * std::size_t(7 * n + 1))
+    if (sum != expected(w) * std::size_t(7 * n + 1)) {
         std::abort();
+    }
     delete r;
     return best;
 }
@@ -73,8 +77,9 @@ int main(int argc, char** argv) {
         long        n   = std::atol(argv[4]);
         rig_base*   r   = make_rig(v, w, false);
         std::size_t sum = r->call();
-        for (long i = 0; i < n; ++i)
+        for (long i = 0; i < n; ++i) {
             sum += r->call();
+        }
         return sum == expected(w) * std::size_t(n + 1) ? 0 : 1;
     }
 #ifdef COUNT_MOVES
@@ -84,20 +89,28 @@ int main(int argc, char** argv) {
         "variant",
         "workload",
         "backing");
-    for (int w = 0; w < n_workloads; ++w)
-        for (int v = -1; v < n_variants; ++v)
-            if (applies(v, w))
-                for (bool d : {false, true})
-                    if (v >= 0 || !d)
+    for (int w = 0; w < n_workloads; ++w) {
+        for (int v = -1; v < n_variants; ++v) {
+            if (applies(v, w)) {
+                for (bool d : {false, true}) {
+                    if (v >= 0 || !d) {
                         counts(v, w, d);
+                    }
+                }
+            }
+        }
+    }
 #else
     long n = argc > 1 ? std::atol(argv[1]) : 2000000;
-    for (int w = 0; w < n_workloads; ++w)
-        for (int v = -1; v < n_variants; ++v)
-            if (applies(v, w))
+    for (int w = 0; w < n_workloads; ++w) {
+        for (int v = -1; v < n_variants; ++v) {
+            if (applies(v, w)) {
                 std::printf("%-22s %-16s %7.1f ns\n",
                             variant_name(v),
                             workload_names[w],
                             time_ns(v, w, n));
+            }
+        }
+    }
 #endif
 }

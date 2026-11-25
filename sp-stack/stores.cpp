@@ -22,8 +22,9 @@ struct mem_data {
     std::map<str, str> data;
     bool               deferred;
     value_t            find(const str& key) const {
-        if (auto it = data.find(key); it != data.end())
+        if (auto it = data.find(key); it != data.end()) {
             return it->second;
+        }
         return std::nullopt;
     }
 };
@@ -41,11 +42,13 @@ struct cache_s final : kv_store {
     mutable cache_entries entries_;
     cache_s(const kv_store& b, bool retain) : backing_(&b), entries_(retain) {}
     value_t get_sync(str key) const override {
-        if (auto hit = entries_.find(key))
+        if (auto hit = entries_.find(key)) {
             return hit;
+        }
         auto value = backing_->get_sync(key);
-        if (value)
+        if (value) {
             entries_.insert(key, *value);
+        }
         return value;
     }
 };
@@ -106,8 +109,9 @@ struct cache_frame_v : async_cont {
         t.~str();
         if (how == ASYNC_VALUE) {
             value_t& v = out->value;
-            if (v)
+            if (v) {
                 entries->insert(*key, *v);
+            }
         }
         async_cont* up = k;
         async_sp    top;
@@ -125,8 +129,9 @@ struct cache_v final : kv_store_v {
                          async_cont*    k,
                          async_sp       sp) const noexcept override {
         value_t& hit = *::new (&out->value) value_t(entries_.find(key));
-        if (hit)
+        if (hit) {
             return {k, ASYNC_VALUE};
+        }
         hit.~value_t();
         async_sp top = sp;
         auto*    f   = ::new (async_push(&top, sizeof(cache_frame_v))) cache_frame_v;
@@ -139,8 +144,9 @@ struct cache_v final : kv_store_v {
         };
         ::new (&f->t) str(key);
         async_next n = backing_->get_entry(f->t, out, f, top);
-        if (n.next == f)
+        if (n.next == f) {
             return f->after_await(n.how);
+        }
         return n;
     }
 };
@@ -200,8 +206,9 @@ struct cache_frame_m : ms::cont {
         t.~str();
         if (how == ASYNC_VALUE) {
             value_t& v = out->value;
-            if (v)
+            if (v) {
                 entries->insert(*key, *v);
+            }
         }
         return {k, how};
     }
@@ -219,8 +226,9 @@ struct cache_m final : kv_store_m {
     [[gnu::noinline]] ms::next
     get_entry(str& key, slot<value_t>* out, ms::cont* k) const noexcept override {
         value_t& hit = *::new (&out->value) value_t(entries_.find(key));
-        if (hit)
+        if (hit) {
             return {k, ASYNC_VALUE};
+        }
         hit.~value_t();
         cache_frame_m f;
         f.resume  = &resumed;
@@ -233,8 +241,9 @@ struct cache_m final : kv_store_m {
         ms::next n = backing_->get_entry(f.t, out, &f);
         MS_CLOBBER();
         if (n.k != &f) { // the callee suspended, and its frame is below ours
-            if (ms::after_pending)
+            if (ms::after_pending) {
                 ms::after_pending();
+            }
             MS_LEAVE(n);
         }
         return f.after_await(n.how);
@@ -255,9 +264,11 @@ stores make_stores(bool retain, bool deferred) {
 // ============================================================================
 std::size_t count_found_sync(const kv_store& s, const str& key, long n) {
     std::size_t total = 0;
-    for (long i = 0; i < n; ++i)
-        if (s.get_sync(key))
+    for (long i = 0; i < n; ++i) {
+        if (s.get_sync(key)) {
             ++total;
+        }
+    }
     return total;
 }
 
@@ -282,8 +293,9 @@ struct count_frame : Cont {
 
     void step(int how) noexcept {
         arg.~str();
-        if (how == ASYNC_VALUE && v.value)
+        if (how == ASYNC_VALUE && v.value) {
             ++total;
+        }
         v.destroy(how);
         ++i;
     }
@@ -295,8 +307,9 @@ struct count_frame_c : count_frame<async_cont, kv_store_v> {
         while (i < n) {
             ::new (&arg) str(*key);
             async_next r = s->get_entry(arg, &v, this, top);
-            if (r.next != this)
+            if (r.next != this) {
                 return r;
+            }
             step(r.how);
         }
         ::new (&out->value) std::size_t(total);
@@ -315,8 +328,9 @@ struct count_frame_m : count_frame<ms::cont, kv_store_m> {
             ::new (&arg) str(*key);
             ms::next r = s->get_entry(arg, &v, this);
             MS_CLOBBER();
-            if (r.k != this)
+            if (r.k != this) {
                 MS_LEAVE(r);
+            }
             step(r.how);
         }
         ::new (&out->value) std::size_t(total);
@@ -416,10 +430,12 @@ struct all_frame_m : ms::cont {
     ms::next finish() noexcept {
         std::size_t found = 0;
         for (std::size_t i = 0; i < n; ++i) {
-            if (kids[i].finish())
+            if (kids[i].finish()) {
                 ++found;
-            if (kids[i].stk.base)
+            }
+            if (kids[i].stk.base) {
                 stacks->release(kids[i].stk);
+            }
         }
         ::new (&out->value) std::size_t(found);
         return {k, ASYNC_VALUE};
@@ -433,8 +449,9 @@ struct all_frame_m : ms::cont {
         auto* kid      = static_cast<child_m*>(c);
         kid->how       = how;
         all_frame_m* p = kid->parent;
-        if (--p->remaining == 0)
+        if (--p->remaining == 0) {
             return {p, ASYNC_VALUE};
+        }
         return {nullptr, ASYNC_PENDING};
     }
 };
@@ -453,10 +470,12 @@ struct all_frame_c : async_cont {
     async_next finish() noexcept {
         std::size_t found = 0;
         for (std::size_t i = 0; i < n; ++i) {
-            if (kids[i].finish())
+            if (kids[i].finish()) {
                 ++found;
-            if (kids[i].root)
+            }
+            if (kids[i].root) {
                 async_stack_destroy(kids[i].root);
+            }
         }
         std::free(kids);
         ::new (&out->value) std::size_t(found);
@@ -506,8 +525,9 @@ struct all_frame_c : async_cont {
             std::abort();
         }
     }
-    if (f.remaining == 0)
+    if (f.remaining == 0) {
         return f.finish();
+    }
     MS_LEAVE((ms::next{nullptr, ASYNC_PENDING}));
 }
 
@@ -527,8 +547,9 @@ async_next count_all_c(const kv_store_v&  s,
     f->n         = n;
     f->remaining = 0;
     f->kids      = static_cast<child_c*>(std::malloc(n * sizeof(child_c)));
-    if (!f->kids)
+    if (!f->kids) {
         std::abort();
+    }
     for (std::size_t i = 0; i < n; ++i) {
         child_c* kid = ::new (&f->kids[i]) child_c;
         kid->parent  = f;
@@ -536,8 +557,9 @@ async_next count_all_c(const kv_store_v&  s,
             auto* kid      = static_cast<child_c*>(c);
             kid->how       = how;
             all_frame_c* p = kid->parent;
-            if (--p->remaining == 0)
+            if (--p->remaining == 0) {
                 return {p, ASYNC_VALUE};
+            }
             return {nullptr, ASYNC_PENDING};
         };
         ::new (&kid->arg) str(keys[i]);
@@ -553,7 +575,8 @@ async_next count_all_c(const kv_store_v&  s,
             std::abort();
         }
     }
-    if (f->remaining == 0)
+    if (f->remaining == 0) {
         return f->finish();
+    }
     return {nullptr, ASYNC_PENDING};
 }

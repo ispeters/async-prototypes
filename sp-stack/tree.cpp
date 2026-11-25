@@ -3,8 +3,9 @@
 bool walk_leaves_suspend;
 
 [[gnu::noinline]] long walk_sync(const node* t) {
-    if (!t)
+    if (!t) {
         return 0;
+    }
     long a = walk_sync(t->left);
     long b = walk_sync(t->right);
     return (a ^ (b << 1)) + t->value;
@@ -38,8 +39,9 @@ struct walk_frame_c : async_cont {
         if (f->state == 1) {
             f->state     = 2;
             async_next n = walk_c(f->t->right, &f->b, f, f->top);
-            if (n.next != f)
+            if (n.next != f) {
                 return n;
+            }
         }
         return f->finish();
     }
@@ -69,8 +71,9 @@ struct walk_frame_m : ms::cont {
             f->state   = 2;
             ms::next n = walk_m(f->t->right, &f->b, f);
             MS_CLOBBER();
-            if (n.k != f)
+            if (n.k != f) {
                 MS_LEAVE(n);
+            }
         }
         *f->out = (f->a ^ (f->b << 1)) + f->t->value;
         return {f->k, ASYNC_VALUE};
@@ -112,12 +115,14 @@ walk_c(const node* t, long* out, async_cont* k, async_sp sp) noexcept {
     f->top       = top;
     f->state     = 1;
     async_next n = walk_c(t->left, &f->a, f, top);
-    if (n.next != f)
+    if (n.next != f) {
         return n;
+    }
     f->state = 2;
     n        = walk_c(t->right, &f->b, f, top);
-    if (n.next != f)
+    if (n.next != f) {
         return n;
+    }
     return f->finish();
 }
 
@@ -144,13 +149,15 @@ walk_c(const node* t, long* out, async_cont* k, async_sp sp) noexcept {
     f.state    = 1;
     ms::next n = walk_m(t->left, &f.a, &f);
     MS_CLOBBER();
-    if (n.k != &f)
+    if (n.k != &f) {
         MS_LEAVE(n);
+    }
     f.state = 2;
     n       = walk_m(t->right, &f.b, &f);
     MS_CLOBBER();
-    if (n.k != &f)
+    if (n.k != &f) {
         MS_LEAVE(n);
+    }
     *out = (f.a ^ (f.b << 1)) + t->value;
     return {k, ASYNC_VALUE};
 }

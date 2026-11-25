@@ -57,10 +57,12 @@ struct root : async_cont {
     static async_next                     resume(async_cont* c, int how) noexcept {
         auto* r = static_cast<root*>(c);
         r->how  = how;
-        if (how == VALUE)
+        if (how == VALUE) {
             r->value.adopt();
-        if (how == ERROR)
+        }
+        if (how == ERROR) {
             r->ec.adopt();
+        }
         return {};
     }
     root();

@@ -21,8 +21,9 @@ struct scope_t {
       public:
         association() = default;
         explicit association(scope_t* s) noexcept : s_(s) {
-            if (s_)
+            if (s_) {
                 ++s_->live;
+            }
         }
         association(association&& o) noexcept : s_(std::exchange(o.s_, nullptr)) {}
         auto operator=(association o) noexcept -> association& {
@@ -30,8 +31,9 @@ struct scope_t {
             return *this;
         }
         ~association() {
-            if (s_)
+            if (s_) {
                 --s_->live;
+            }
         }
         explicit operator bool() const noexcept { return s_ != nullptr; }
         auto     try_associate() const noexcept -> association {
@@ -65,11 +67,13 @@ struct checked {
     checked(const checked&) : tracked(g->armed) {}
     checked(checked&&) noexcept : tracked(g->armed) {}
     ~checked() {
-        if (!tracked)
+        if (!tracked) {
             return;
+        }
         ++g->destroyed;
-        if (g->live == 0 && !g->refusing)
+        if (g->live == 0 && !g->refusing) {
             ++g->bad;
+        }
     }
     template <class R>
     struct op {
@@ -97,8 +101,9 @@ void check(const char* name, Make make) {
             sc.destroyed = 0;
             sc.armed     = true;
             auto s       = make(std::move(c), scope_t::token{&sc});
-            if (closed && sc.destroyed < 1)
+            if (closed && sc.destroyed < 1) {
                 ++sc.bad;
+            }
             sc.armed    = !closed;
             sc.refusing = false;
             ex::sync_wait(std::move(s));

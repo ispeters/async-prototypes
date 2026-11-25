@@ -52,8 +52,9 @@ struct ctx {
     void (*del)(void*)         = nullptr;
     bool delete_in_completion  = false;
     void done() noexcept {
-        if (delete_in_completion)
+        if (delete_in_completion) {
             del(op);
+        }
         finished.store(true, std::memory_order_release);
         finished.notify_one();
     }
@@ -92,16 +93,19 @@ void run(Sndr sndr, stop_when when, bool delete_in_completion) {
     auto* op               = new op_t(ex::connect(std::move(sndr), rcvr<P>{&c}));
     c.op                   = op;
     c.del                  = [](void* p) { delete static_cast<op_t*>(p); };
-    if (when == stop_when::before_start)
+    if (when == stop_when::before_start) {
         c.src.request_stop();
+    }
     std::optional<std::jthread> stopper;
-    if (when == stop_when::racing)
+    if (when == stop_when::racing) {
         stopper.emplace([&] { c.src.request_stop(); });
+    }
     ex::start(*op);
     c.finished.wait(false, std::memory_order_acquire);
     stopper.reset();
-    if (!delete_in_completion)
+    if (!delete_in_completion) {
         delete op;
+    }
 }
 
 exec::static_thread_pool pool(3);
@@ -116,14 +120,16 @@ int all(const char* name, int n) {
                                 [v]() noexcept { return v; });
     };
     int runs = 0;
-    for (int i = 0; i < n; ++i)
+    for (int i = 0; i < n; ++i) {
         for (bool del : {false, true}) {
-            for (auto w : {stop_when::never, stop_when::before_start, stop_when::racing})
+            for (auto w :
+                 {stop_when::never, stop_when::before_start, stop_when::racing}) {
                 run<P>(ts::when_all(
                            stop_leaf{}, ex::starts_on(s, ex::just_error(1)), stop_leaf{}),
                        w,
                        del),
                     ++runs;
+            }
             for (auto w : {stop_when::before_start, stop_when::racing}) {
                 run<P>(ts::when_all(stop_leaf{}, stop_leaf{}), w, del), ++runs;
                 run<P>(ts::when_all(stop_leaf{}, ex::starts_on(s, ex::just(1))), w, del),
@@ -139,6 +145,7 @@ int all(const char* name, int n) {
                 run<P>(ts::when_all(steady(1), steady(2)), w, del), ++runs;
             }
         }
+    }
     std::printf("%-22s %d runs\n", name, runs);
     return runs;
 }

@@ -10,8 +10,9 @@
 
 static std::vector<node> nodes;
 static const node*       build(int depth) { // a full tree; nodes were reserved up front
-    if (depth == 0)
+    if (depth == 0) {
         return nullptr;
+    }
     std::size_t i = nodes.size();
     nodes.push_back({nullptr, nullptr, long(i * 2654435761u % 1000)});
     const node* l  = build(depth - 1);
@@ -45,12 +46,14 @@ struct root_m : ms::cont {
     long       out;
     root_c     k;
     async_next n = walk_c(t, &out, &k, sp);
-    if (n.next == &k)
+    if (n.next == &k) {
         k.how = n.how;
-    else
+    } else {
         async_run(n);
-    while (k.how == ASYNC_PENDING)
+    }
+    while (k.how == ASYNC_PENDING) {
         async_run_pending();
+    }
     return out;
 }
 
@@ -60,12 +63,14 @@ struct root_m : ms::cont {
     ms::next n = ms::enter(stk.top(), &k, [&] [[gnu::always_inline]] () noexcept {
         return walk_m(t, &out, &k);
     });
-    if (n.k == &k)
+    if (n.k == &k) {
         k.how = n.how;
-    else
+    } else {
         ms::run(n);
-    while (k.how == ASYNC_PENDING)
+    }
+    while (k.how == ASYNC_PENDING) {
         ms::run_pending();
+    }
     return out;
 }
 
@@ -82,10 +87,11 @@ int main(int argc, char** argv) {
     if (argc >= 4 &&
         !std::strcmp(argv[1], "loop")) { // for callgrind: loop <s|c|m> <walks>
         long sum = 0, reps = std::atol(argv[3]);
-        for (long i = 0; i < reps; ++i)
+        for (long i = 0; i < reps; ++i) {
             sum += argv[2][0] == 's'   ? walk_sync(t)
                    : argv[2][0] == 'c' ? run_c(t, sp)
                                        : run_m(t, stk);
+        }
         return sum == reps * want ? 0 : 1;
     }
 
@@ -98,8 +104,9 @@ int main(int argc, char** argv) {
         async_high_water       = sizeof(async_slab);
         ms::lowest_deferred_sp = nullptr;
         ms::fill(stk);
-        if (run_c(t, sp) != want || run_m(t, stk) != want)
+        if (run_c(t, sp) != want || run_m(t, stk) != want) {
             return std::printf("FAILED\n"), 1;
+        }
         if (suspend) {
             std::size_t live = static_cast<char*>(stk.top()) -
                                static_cast<char*>(ms::lowest_deferred_sp);
@@ -125,28 +132,31 @@ int main(int argc, char** argv) {
     for (int suspend = 0; suspend < paths; ++suspend) {
         walk_leaves_suspend = suspend;
         double best[3]      = {1e30, 1e30, 1e30};
-        for (int rep = 0; rep < 15; ++rep)
+        for (int rep = 0; rep < 15; ++rep) {
             for (int col = suspend; col < 3; ++col) {
                 auto t0  = std::chrono::steady_clock::now();
                 long got = col == 0   ? walk_sync(t)
                            : col == 1 ? run_c(t, sp)
                                       : run_m(t, stk);
                 auto t1  = std::chrono::steady_clock::now();
-                if (got != want)
+                if (got != want) {
                     std::abort();
+                }
                 best[col] = std::min(
                     best[col],
                     std::chrono::duration<double, std::nano>(t1 - t0).count() / calls);
             }
-        if (suspend)
+        }
+        if (suspend) {
             std::printf("every leaf suspends, ns per call:  cursor %.2f  machine %.2f\n",
                         best[1],
                         best[2]);
-        else
+        } else {
             std::printf("completing inline, ns per call:    synchronous %.2f  cursor "
                         "%.2f  machine %.2f\n",
                         best[0],
                         best[1],
                         best[2]);
+        }
     }
 }

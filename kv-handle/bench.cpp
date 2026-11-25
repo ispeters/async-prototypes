@@ -13,16 +13,18 @@ static long g_news, g_new_bytes;
 void* operator new(std::size_t n) {
     ++g_news;
     g_new_bytes += n;
-    if (void* p = std::malloc(n))
+    if (void* p = std::malloc(n)) {
         return p;
+    }
     std::abort();
 }
 void* operator new(std::size_t n, std::align_val_t a) {
     ++g_news;
     g_new_bytes += n;
     std::size_t al = static_cast<std::size_t>(a);
-    if (void* p = std::aligned_alloc(al, (n + al - 1) / al * al))
+    if (void* p = std::aligned_alloc(al, (n + al - 1) / al * al)) {
         return p;
+    }
     std::abort();
 }
 void operator delete(void* p, std::align_val_t) noexcept { std::free(p); }
@@ -80,8 +82,9 @@ template <class Store, class Rcvr, class... Extra>
         auto op        = ex::connect(s.get(key), Rcvr{{&st}, extra...});
         g_caller_frame = sizeof(op) + sizeof(st);
         ex::start(op);
-        while (st.how == ASYNC_PENDING)
+        while (st.how == ASYNC_PENDING) {
             async_run_pending();
+        }
     }
     std::size_t r = (st.how == ASYNC_VALUE && st.out.value) ? 1 : 0;
     st.out.destroy(st.how);
@@ -99,12 +102,14 @@ struct root_cont : async_cont {
     }
     // this caller is the bottom of the stack
     void drive(async_next n) noexcept {
-        if (n.next == this)
+        if (n.next == this) {
             how = n.how;
-        else
+        } else {
             async_run(n);
-        while (how == ASYNC_PENDING)
+        }
+        while (how == ASYNC_PENDING) {
             async_run_pending();
+        }
     }
 };
 
@@ -169,19 +174,22 @@ static std::size_t call(const config& c, const stores& s, const str& key, async_
     case 's':
         return call_sync(*s.today, key);
     case 'c':
-        if (s.alloc)
+        if (s.alloc) {
             return call_cxx26<kv_store_alloc, root_rcvr_strand, async_sp*>(
                 *s.alloc, key, &sp);
-        if (s.cursor)
+        }
+        if (s.cursor) {
             return call_cxx26<kv_store_cursor, root_rcvr_strand, async_sp*>(
                 *s.cursor, key, &sp);
+        }
         return s.today
                    ? call_cxx26<kv_store, root_rcvr_strand, async_sp*>(*s.today, key, &sp)
                    : call_cxx26<kv_store_h, root_rcvr_strand, async_sp*>(
                          *s.hidden, key, &sp);
     case 'd':
-        if (s.cursor)
+        if (s.cursor) {
             return call_cxx26<kv_store_cursor, root_rcvr_plain>(*s.cursor, key);
+        }
         return s.today ? call_cxx26<kv_store, root_rcvr_plain>(*s.today, key)
                        : call_cxx26<kv_store_h, root_rcvr_plain>(*s.hidden, key);
     default:
@@ -196,16 +204,18 @@ static void counts(const config& c, const char* what, bool retain, bool deferred
     async_sp sp = async_stack_create();
     str      key("k1");
     // warm the cache, so the measured call is a hit
-    if (retain)
+    if (retain) {
         call(c, s, key, sp);
+    }
     str::key_copies = str::key_moves = str::val_copies = str::val_moves = 0;
     g_news = g_new_bytes  = 0;
     async_high_water      = sizeof(async_slab);
     async_slabs_allocated = 0;
     g_caller_frame        = 0;
     std::size_t found     = call(c, s, key, sp);
-    if (!found)
+    if (!found) {
         std::abort();
+    }
     std::printf(
         "%-36s| %-14s| %ld / %ld | %ld / %ld | %ld (%ld B) | %zu | %zu B | %zu B\n",
         c.name,
@@ -230,14 +240,16 @@ static void counts(const config& c, const char* what, bool retain, bool deferred
     double      best = 1e30;
     for (int rep = 0; rep < 7; ++rep) {
         auto t0 = std::chrono::steady_clock::now();
-        for (long i = 0; i < n; ++i)
+        for (long i = 0; i < n; ++i) {
             sum += call(c, s, key, sp);
+        }
         auto t1 = std::chrono::steady_clock::now();
         best =
             std::min(best, std::chrono::duration<double, std::nano>(t1 - t0).count() / n);
     }
-    if (sum != std::size_t(7 * n + 1))
+    if (sum != std::size_t(7 * n + 1)) {
         std::abort();
+    }
     return best;
 }
 
@@ -251,8 +263,9 @@ int main(int argc, char** argv) {
         async_sp      sp     = async_stack_create();
         str           key("k1");
         std::size_t   sum = call(c, s, key, sp);
-        for (long i = 0; i < n; ++i)
+        for (long i = 0; i < n; ++i) {
             sum += call(c, s, key, sp);
+        }
         return sum == std::size_t(n + 1) ? 0 : 1;
     }
 #ifdef COUNT_MOVES
@@ -263,15 +276,17 @@ int main(int argc, char** argv) {
     for (const auto& c : configs) {
         counts(c, "hit", true, false);
         counts(c, "miss", false, false);
-        if (c.root != 's')
+        if (c.root != 's') {
             counts(c, "miss, deferred", false, true);
+        }
     }
 #else
     long n = argc > 1 ? std::atol(argv[1]) : 2000000;
-    for (const auto& c : configs)
+    for (const auto& c : configs) {
         std::printf("%-36s hit %6.1f ns   miss %6.1f ns\n",
                     c.name,
                     time_ns(c, true, n),
                     time_ns(c, false, n));
+    }
 #endif
 }

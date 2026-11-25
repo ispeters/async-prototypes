@@ -39,8 +39,9 @@ struct mem final : store<V>, mem_data {
     }
     value_t get_sync(str key) const override { return find(key); }
     str     fetch_sync(const str& key) const {
-        if (const str* v = lookup(key))
+        if (const str* v = lookup(key)) {
             return *v;
+        }
         std::rethrow_exception(g_not_found);
     }
 };
@@ -59,11 +60,13 @@ struct cache final : store<V> {
     }
     // The synchronous function the asynchronous one parallels, as the yardstick.
     value_t get_sync(str key) const override {
-        if (auto hit = entries_.find(key))
+        if (auto hit = entries_.find(key)) {
             return hit;
+        }
         auto value = backing_->get_sync(key);
-        if (value)
+        if (value) {
             entries_.insert(key, *value);
+        }
         return value;
     }
 };

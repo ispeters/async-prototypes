@@ -26,10 +26,11 @@ struct static_link {
     typename V::rec* k;
     template <int I>
     void* dest() const noexcept {
-        if constexpr (I == VAL)
+        if constexpr (I == VAL) {
             return &s->value;
-        else
+        } else {
             return &s->error;
+        }
     }
 };
 
@@ -38,10 +39,11 @@ struct static_link {
 // over their own record, which the frame's `wire` filled.
 template <class V, class Up>
 auto pass_dst(const Up& up) noexcept {
-    if constexpr (by_record<V>)
+    if constexpr (by_record<V>) {
         return nodst{};
-    else
+    } else {
         return up.d;
+    }
 }
 
 struct none_t {};
@@ -89,10 +91,11 @@ template <class V, class T, bool Fetch>
                                                            async_sp sp) noexcept {
     link<V, T> up{d, k};
     if (!self.deferred) {
-        if constexpr (Fetch)
+        if constexpr (Fetch) {
             return fetch_now<V>(self, key, up);
-        else
+        } else {
             return get_now<V>(self, key, up);
+        }
     }
     using F      = leaf_frame<V, T, Fetch>;
     async_sp top = sp;
@@ -104,10 +107,11 @@ template <class V, class T, bool Fetch>
         auto*              f  = static_cast<F*>(t);
         link<V, T>         up = f->up;
         typename V::handle h;
-        if constexpr (Fetch)
+        if constexpr (Fetch) {
             h = fetch_now<V>(*f->self, *f->key, up);
-        else
+        } else {
             h = get_now<V>(*f->self, *f->key, up);
+        }
         async_sp top;
         async_pop(&top, f); // the frame is gone before the caller continues
         V::run(h);
@@ -148,8 +152,9 @@ struct cache_frame : V::rec {
         arg.~str();
         if constexpr (I == VAL) {
             value_t& v = *static_cast<value_t*>(up.template dest<VAL>());
-            if (v)
+            if (v) {
                 entries->insert(*key, *v);
+            }
         }
         auto     k = up.k;
         async_sp top;
@@ -169,8 +174,9 @@ cache_body(cache_entries&                    entries,
     link<V, value_t> up{d, k};
     // `hit` is the return object: it's constructed in the caller's storage
     value_t& hit = *::new (up.template dest<VAL>()) value_t(entries.find(key));
-    if (hit)
+    if (hit) {
         return V::template complete<VAL>(k);
+    }
     hit.~value_t();
     using F      = cache_frame<V>;
     async_sp top = sp;
@@ -241,11 +247,11 @@ struct filter_frame : V::rec {
 // The destinations a filtering frame hands its child.
 template <class V, class F>
 [[gnu::always_inline]] inline auto filter_dst(F* f) noexcept {
-    if constexpr (V::row == 1)
+    if constexpr (V::row == 1) {
         return &f->own;
-    else if constexpr (by_record<V>)
+    } else if constexpr (by_record<V>) {
         return nodst{};
-    else {
+    } else {
         f->tab.p[VAL] = f->template my_dest<VAL>();
         f->tab.p[ERR] = f->template my_dest<ERR>();
         return &f->tab;

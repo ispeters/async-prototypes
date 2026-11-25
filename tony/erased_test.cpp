@@ -22,18 +22,21 @@ struct lookup_rcvr {
     lookup_root* r;
     template <class Sig>
     void* destination() noexcept {
-        if constexpr (same_as<Sig, set_value_t(value_t)>)
+        if constexpr (same_as<Sig, set_value_t(value_t)>) {
             return r->value.address();
-        else
+        } else {
             return r->error.address();
+        }
     }
     template <class Sig>
     operation_handle complete() noexcept {
         r->how = erased_receiver::index<Sig>;
-        if constexpr (same_as<Sig, set_value_t(value_t)>)
+        if constexpr (same_as<Sig, set_value_t(value_t)>) {
             r->value.adopt();
-        if constexpr (same_as<Sig, set_error_t(std::exception_ptr)>)
+        }
+        if constexpr (same_as<Sig, set_error_t(std::exception_ptr)>) {
             r->error.adopt();
+        }
         return {};
     }
 };

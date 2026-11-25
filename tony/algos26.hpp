@@ -474,10 +474,11 @@ class run_loop {
   private:
     void push_back(task* t) {
         std::lock_guard g(m_);
-        if (tail_)
+        if (tail_) {
             tail_->next = t;
-        else
+        } else {
             head_ = t;
+        }
         tail_ = t;
         cv_.notify_one();
     }
@@ -487,8 +488,9 @@ class run_loop {
         task* t = head_;
         if (t) {
             head_ = t->next;
-            if (!head_)
+            if (!head_) {
                 tail_ = nullptr;
+            }
         }
         return t;
     }

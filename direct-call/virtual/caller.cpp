@@ -12,8 +12,9 @@ struct op {
         s->done   = true;
     }
     void start() noexcept {
-        if ((self.*Entry)(key, cont{&resume, this}, &result))
+        if ((self.*Entry)(key, cont{&resume, this}, &result)) {
             done = true;
+        }
     }
 };
 #define NI [[gnu::noinline]]

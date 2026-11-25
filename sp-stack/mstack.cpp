@@ -98,8 +98,9 @@ static cont*  head;
 static cont** tail = &head;
 
 void defer(cont* k) noexcept {
-    if (!lowest_deferred_sp || k->sp < lowest_deferred_sp)
+    if (!lowest_deferred_sp || k->sp < lowest_deferred_sp) {
         lowest_deferred_sp = k->sp;
+    }
     k->link = nullptr;
     *tail   = k;
     tail    = &k->link;
@@ -110,8 +111,9 @@ int run_pending() noexcept {
     while (head) {
         cont* k = head;
         head    = k->link;
-        if (!head)
+        if (!head) {
             tail = &head;
+        }
         ms_run(k, ASYNC_VALUE);
         ++n;
     }
@@ -132,8 +134,9 @@ stack mmap_provider::map(std::size_t size) noexcept {
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK | MAP_NORESERVE,
                          -1,
                          0);
-    if (p == MAP_FAILED)
+    if (p == MAP_FAILED) {
         return {};
+    }
     if (mprotect(static_cast<char*>(p) + g, size, PROT_READ | PROT_WRITE) != 0) {
         munmap(p, size + g);
         return {};
@@ -150,22 +153,25 @@ stack mmap_provider::acquire() noexcept {
         return s;
     }
     stack s = map(size);
-    if (!s.base)
+    if (!s.base) {
         std::abort();
+    }
     ++mapped;
     return s;
 }
 
 void mmap_provider::release(stack s) noexcept {
-    if (pooled)
+    if (pooled) {
         free_.push_back(s);
-    else
+    } else {
         unmap(s);
+    }
 }
 
 mmap_provider::~mmap_provider() {
-    for (stack s : free_)
+    for (stack s : free_) {
         unmap(s);
+    }
 }
 
 stack arena_provider::acquire() noexcept {
@@ -174,8 +180,9 @@ stack arena_provider::acquire() noexcept {
         free_.pop_back();
         return s;
     }
-    if (next_ == count)
+    if (next_ == count) {
         std::abort();
+    }
     return {buf + chunk * next_++, chunk};
 }
 
@@ -183,8 +190,9 @@ void fill(stack s) noexcept { std::memset(s.base, 0xA5, s.size); }
 
 std::size_t high_water(stack s) noexcept {
     std::size_t i = 0;
-    while (i < s.size && static_cast<unsigned char>(s.base[i]) == 0xA5)
+    while (i < s.size && static_cast<unsigned char>(s.base[i]) == 0xA5) {
         ++i;
+    }
     return s.size - i;
 }
 

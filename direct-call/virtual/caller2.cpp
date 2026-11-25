@@ -11,8 +11,9 @@ struct op {
         s->done   = true;
     }
     void start() noexcept {
-        if ((self.*Entry)(key, cont{&resume, this}, &result))
+        if ((self.*Entry)(key, cont{&resume, this}, &result)) {
             done = true;
+        }
     }
 };
 // entry as a plain function that makes a qualified (non-virtual) call
@@ -28,8 +29,9 @@ struct op_thunk {
         s->done   = true;
     }
     void start() noexcept {
-        if (Thunk(self, key, cont{&resume, this}, &result))
+        if (Thunk(self, key, cont{&resume, this}, &result)) {
             done = true;
+        }
     }
 };
 inline bool remote_entry(remote& r, int key, cont k, int* slot) noexcept {

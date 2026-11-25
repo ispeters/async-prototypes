@@ -424,10 +424,12 @@ struct when_all_op {
             return rcvr.template complete<set_value_t(Vs)>();
         }
         // abandon the results
-        if (constructed[0])
+        if (constructed[0]) {
             results->first.~V1();
-        if (constructed[1])
+        }
+        if (constructed[1]) {
             results->second.~V2();
+        }
         if (state.load() == stopped) {
             return rcvr.template complete<set_stopped_t()>();
         }
@@ -513,10 +515,11 @@ class run_loop {
   private:
     void push_back(task* t) {
         std::lock_guard g(m_);
-        if (tail_)
+        if (tail_) {
             tail_->next = t;
-        else
+        } else {
             head_ = t;
+        }
         tail_ = t;
         cv_.notify_one();
     }
@@ -526,8 +529,9 @@ class run_loop {
         task* t = head_;
         if (t) {
             head_ = t->next;
-            if (!head_)
+            if (!head_) {
                 tail_ = nullptr;
+            }
         }
         return t;
     }

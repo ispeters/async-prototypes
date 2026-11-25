@@ -55,8 +55,9 @@ struct async_cont {
 };
 
 inline static void async_run(async_next n) {
-    while (n.next)
+    while (n.next) {
         n = n.next->resume(n.next, n.how);
+    }
 }
 
 /* The async stack: a chain of aligned slabs. A cursor is one pointer; the
@@ -79,8 +80,9 @@ inline static async_slab* async_slab_of(async_sp sp) {
 
 inline static async_sp async_slab_new(async_slab* prev, async_sp prev_top) {
     async_slab* s = (async_slab*)aligned_alloc(ASYNC_SLAB_SIZE, ASYNC_SLAB_SIZE);
-    if (!s)
+    if (!s) {
         abort();
+    }
     s->prev     = prev;
     s->prev_top = prev_top;
     ++async_slabs_allocated;
@@ -96,16 +98,18 @@ inline static void* async_push(async_sp* top, size_t n) {
     async_slab* slab = async_slab_of(sp);
     n                = (n + 15) & ~(size_t)15;
     if (__builtin_expect((size_t)(sp - (async_sp)slab) + n > ASYNC_SLAB_SIZE, 0)) {
-        if (n > ASYNC_SLAB_SIZE - sizeof(async_slab))
+        if (n > ASYNC_SLAB_SIZE - sizeof(async_slab)) {
             abort(); /* prototype limit */
+        }
         sp = async_slab_new(slab, sp);
     }
     *top = sp + n;
 #ifdef ASYNC_STATS
     {
         size_t used = (size_t)(*top - (async_sp)async_slab_of(*top));
-        if (used > async_high_water)
+        if (used > async_high_water) {
             async_high_water = used;
+        }
     }
 #endif
     return sp;

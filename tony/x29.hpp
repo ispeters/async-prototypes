@@ -116,10 +116,11 @@ struct env { // the join of two environments, the first winning
     auto query(Q q) const noexcept
         requires requires { first.query(q); } || requires { second.query(q); }
     {
-        if constexpr (requires { first.query(q); })
+        if constexpr (requires { first.query(q); }) {
             return first.query(q);
-        else
+        } else {
             return second.query(q);
+        }
     }
 };
 template <class E1, class E2>
@@ -139,10 +140,11 @@ struct never_stop_token {
 };
 template <class E>
 auto get_stop_token_t::operator()(const E& e) const noexcept {
-    if constexpr (requires { e.query(*this); })
+    if constexpr (requires { e.query(*this); }) {
         return e.query(*this);
-    else
+    } else {
         return never_stop_token{};
+    }
 }
 
 // Storage for a T that someone else constructs: what a destination points

@@ -19,8 +19,9 @@ static double now_ns() {
 static long rss_kib() {
     long pages = 0, resident = 0;
     if (FILE* f = std::fopen("/proc/self/statm", "r")) {
-        if (std::fscanf(f, "%ld %ld", &pages, &resident) != 2)
+        if (std::fscanf(f, "%ld %ld", &pages, &resident) != 2) {
             resident = 0;
+        }
         std::fclose(f);
     }
     return resident * (sysconf(_SC_PAGESIZE) / 1024);
@@ -33,8 +34,9 @@ static int maps(std::size_t limit) {
     double                 t0   = now_ns();
     while (v.size() < limit) {
         ms::stack s = ms::mmap_provider::map(64 << 10);
-        if (!s.base)
+        if (!s.base) {
             break;
+        }
         static_cast<char*>(s.top())[-1] = 1; // touch the first page a strand would use
         v.push_back(s);
     }
@@ -47,8 +49,9 @@ static int maps(std::size_t limit) {
                 (t1 - t0) / v.size(),
                 double(rss1 - rss0) / v.size());
     t0 = now_ns();
-    for (ms::stack s : v)
+    for (ms::stack s : v) {
         ms::mmap_provider::unmap(s);
+    }
     std::printf("unmapped at %.0f ns each\n", (now_ns() - t0) / v.size());
     return 0;
 }
@@ -90,8 +93,9 @@ static int rss(char column, std::size_t n) {
 // ---- overflow -----------------------------------------------------------------
 [[gnu::noinline]] static int deep(int levels) noexcept { // about 1 KiB of stack per level
     volatile char buf[1000];
-    for (std::size_t i = 0; i < sizeof(buf); ++i)
+    for (std::size_t i = 0; i < sizeof(buf); ++i) {
         buf[i] = 0x42;
+    }
     return levels ? deep(levels - 1) + buf[0] : buf[1];
 }
 
@@ -104,8 +108,9 @@ static void      on_segv(int, siginfo_t* si, void*) {
         sizeof(msg),
         "SIGSEGV %ld bytes below the stack's low end: the guard page caught it\n",
         below);
-    if (write(1, msg, len) < 0)
+    if (write(1, msg, len) < 0) {
         _exit(2);
+    }
     _exit(0);
 }
 
@@ -154,8 +159,9 @@ static int overflow_arena() {
             return ms::next{&kb, ASYNC_VALUE};
         });
     std::size_t changed = 0;
-    for (std::size_t i = 0; i < held; ++i)
+    for (std::size_t i = 0; i < held; ++i) {
         changed += saved[i] != static_cast<char*>(a.top())[-long(held) + long(i)];
+    }
     std::printf("two strands on adjacent 16 KiB pieces of a user's buffer; A is "
                 "suspended holding %zu B\n"
                 "B's synchronous callee ran about 20 KiB deep and returned normally\n"
@@ -202,8 +208,9 @@ static int depths() {
     });
     depth_of("std::sort of 10000 strings", stk, [&] {
         std::vector<std::string> v;
-        for (int i = 0; i < 10000; ++i)
+        for (int i = 0; i < 10000; ++i) {
             v.push_back(std::to_string(i * 7919 % 10007));
+        }
         std::sort(v.begin(), v.end());
     });
     depth_of("std::regex_match, (a|b)*c on 2000 characters", stk, [&] {
@@ -221,16 +228,21 @@ static int depths() {
 }
 
 int main(int argc, char** argv) {
-    if (argc >= 2 && !std::strcmp(argv[1], "maps"))
+    if (argc >= 2 && !std::strcmp(argv[1], "maps")) {
         return maps(argc > 2 ? std::atol(argv[2]) : 100000);
-    if (argc >= 4 && !std::strcmp(argv[1], "rss"))
+    }
+    if (argc >= 4 && !std::strcmp(argv[1], "rss")) {
         return rss(argv[2][0], std::atol(argv[3]));
-    if (argc >= 2 && !std::strcmp(argv[1], "overflow-guard"))
+    }
+    if (argc >= 2 && !std::strcmp(argv[1], "overflow-guard")) {
         return overflow_guard();
-    if (argc >= 2 && !std::strcmp(argv[1], "overflow-arena"))
+    }
+    if (argc >= 2 && !std::strcmp(argv[1], "overflow-arena")) {
         return overflow_arena();
-    if (argc >= 2 && !std::strcmp(argv[1], "depths"))
+    }
+    if (argc >= 2 && !std::strcmp(argv[1], "depths")) {
         return depths();
+    }
     std::printf("usage: limits maps [n] | rss <m|c> <n> | overflow-guard | "
                 "overflow-arena | depths\n");
     return 2;

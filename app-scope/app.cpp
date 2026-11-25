@@ -22,10 +22,11 @@ int main(int argc, char** argv) {
 
     std::puts(wrap ? "variant: when_all(associate(the_app, token), scope.join())"
                    : "variant: when_all(the_app, scope.join())");
-    if (wrap)
+    if (wrap) {
         ex::sync_wait(ex::when_all(ex::associate(std::move(the_app), scope.get_token()),
                                    scope.join()));
-    else
+    } else {
         ex::sync_wait(ex::when_all(std::move(the_app), scope.join()));
+    }
     std::printf("sync_wait returned; spawned work ran %d time(s)\n", spawned_ran);
 }

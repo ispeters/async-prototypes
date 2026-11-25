@@ -12,8 +12,9 @@ const c_store*       c_store_default(void) { return &store; }
 
 static const char* find(const c_store* s, const char* key) {
     for (size_t i = 0; i < sizeof s->keys / sizeof s->keys[0]; ++i) {
-        if (strcmp(s->keys[i], key) == 0)
+        if (strcmp(s->keys[i], key) == 0) {
             return s->values[i];
+        }
     }
     return NULL;
 }
@@ -35,8 +36,9 @@ int c_store_run_pending(void) {
     while (head) {
         task* t = head;
         head    = t->next;
-        if (!head)
+        if (!head) {
             tail = &head;
+        }
         async_run(t->run(t));
         ++n;
     }

@@ -63,8 +63,9 @@ inline static async_next async_complete(async_cont* k, int how) {
 }
 
 inline static void async_run(async_next n) {
-    while (n.next)
+    while (n.next) {
         n = async_resume_of(n.next)(n.next, n.how);
+    }
 }
 
 /* The async stack: here, a bump pointer. */

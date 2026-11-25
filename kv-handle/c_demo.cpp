@@ -35,24 +35,27 @@ struct c_get_len_sender {
         }
         op(op&&) = delete;
         ~op() {
-            if (root)
+            if (root) {
                 async_stack_destroy(root);
+            }
         }
         void start() & noexcept {
             root         = async_stack_create();
             async_next n = c_store_get_len_entry(store, key, &out, this, root);
-            if (n.next == this)
+            if (n.next == this) {
                 complete(n.how);
-            else
+            } else {
                 async_run(n);
+            }
         }
         void complete(int how) noexcept {
-            if (how == ASYNC_VALUE)
+            if (how == ASYNC_VALUE) {
                 ex::set_value(std::move(rcvr), std::size_t(out.value));
-            else if (how == ASYNC_ERROR)
+            } else if (how == ASYNC_ERROR) {
                 ex::set_error(std::move(rcvr), int(out.error));
-            else
+            } else {
                 ex::set_stopped(std::move(rcvr));
+            }
         }
     };
     template <ex::receiver R>
@@ -99,22 +102,25 @@ int main() {
         root_cont  k;
         async_next n       = c_store_get_len_entry(store, key, &out, &k, sp);
         bool       inline_ = n.next == &k;
-        if (inline_)
+        if (inline_) {
             k.how = n.how;
-        else
+        } else {
             async_run(n);
-        while (k.how == ASYNC_PENDING)
+        }
+        while (k.how == ASYNC_PENDING) {
             async_run_pending();
-        if (k.how == ASYNC_VALUE)
+        }
+        if (k.how == ASYNC_VALUE) {
             std::printf("entry  get_len(\"%s\"): value %zu (%s)\n",
                         key,
                         out.value,
                         inline_ ? "inline" : "after suspending");
-        else
+        } else {
             std::printf("entry  get_len(\"%s\"): error %d (%s)\n",
                         key,
                         out.error,
                         inline_ ? "inline" : "after suspending");
+        }
     }
     async_stack_destroy(sp);
 
@@ -125,7 +131,8 @@ int main() {
                                   ex::then([](std::size_t n) noexcept { return n * 2; }),
                               print_rcvr{"sender get_len | then(n * 2)", &done});
         ex::start(op);
-        while (!done)
+        while (!done) {
             async_run_pending();
+        }
     }
 }

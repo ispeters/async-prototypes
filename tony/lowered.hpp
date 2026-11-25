@@ -38,8 +38,9 @@ struct cache : kv_store {
     struct table {
         std::optional<std::string> find(const std::string& k) const {
             auto it = m.find(k);
-            if (it == m.end())
+            if (it == m.end()) {
                 return std::nullopt;
+            }
             return it->second;
         }
         void insert(const std::string& k, const std::string& v) {
@@ -70,8 +71,9 @@ struct cache_get_frame : async_cont { // our record, as the child's caller
                     std::string*      key)
         : async_cont(rec), k(k), self(self), key(key), arg(std::in_place, *key) {}
     ~cache_get_frame() {
-        if (has_value)
+        if (has_value) {
             value.~optional();
+        }
     }
 };
 

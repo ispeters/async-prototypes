@@ -81,17 +81,19 @@ struct tag_of_dom<ex::default_domain> {
 template <class Attrs, class Env>
 std::string describe(const Attrs& a, const Env& e) {
     std::string out = "sched=";
-    if constexpr (requires { ex::get_completion_scheduler<ex::set_value_t>(a, e); })
+    if constexpr (requires { ex::get_completion_scheduler<ex::set_value_t>(a, e); }) {
         out += tag_of_sched<std::remove_cvref_t<
             decltype(ex::get_completion_scheduler<ex::set_value_t>(a, e))>>::get();
-    else
+    } else {
         out += "-";
+    }
     out += " dom=";
-    if constexpr (requires { ex::get_completion_domain<ex::set_value_t>(a, e); })
+    if constexpr (requires { ex::get_completion_domain<ex::set_value_t>(a, e); }) {
         out += tag_of_dom<std::remove_cvref_t<
             decltype(ex::get_completion_domain<ex::set_value_t>(a, e))>>::get();
-    else
+    } else {
         out += "-";
+    }
     return out;
 }
 

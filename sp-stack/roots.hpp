@@ -13,12 +13,14 @@ struct root_c : async_cont {
         };
     }
     void drive(async_next n) noexcept {
-        if (n.next == this)
+        if (n.next == this) {
             how = n.how;
-        else
+        } else {
             async_run(n);
-        while (how == ASYNC_PENDING)
+        }
+        while (how == ASYNC_PENDING) {
             async_run_pending();
+        }
     }
 };
 
@@ -32,12 +34,14 @@ struct root_m : ms::cont {
         sp = stack_top; // the strand is empty by the time the root is told
     }
     void drive(ms::next n) noexcept {
-        if (n.k == this)
+        if (n.k == this) {
             how = n.how;
-        else
+        } else {
             ms::run(n);
-        while (how == ASYNC_PENDING)
+        }
+        while (how == ASYNC_PENDING) {
             ms::run_pending();
+        }
     }
 };
 

@@ -19,8 +19,9 @@ static int                    scribbles;
 [[gnu::noinline]] static void scribble() noexcept {
     ++scribbles;
     volatile char buf[2048];
-    for (std::size_t i = 0; i < sizeof(buf); ++i)
+    for (std::size_t i = 0; i < sizeof(buf); ++i) {
         buf[i] = 0x5A;
+    }
 }
 
 int main() {
@@ -29,7 +30,7 @@ int main() {
     async_sp          sp  = async_stack_create();
 
     // one get: hit, miss, absent; inline and deferred
-    for (int deferred = 0; deferred < 2; ++deferred)
+    for (int deferred = 0; deferred < 2; ++deferred) {
         for (int retain = 0; retain < 2; ++retain) {
             stores s = make_stores(retain, deferred);
             for (const char* key : {"k1", "nope", "k1", "k2", "k1"}) {
@@ -38,9 +39,10 @@ int main() {
                 CHECK(call_machine(*s.machine, key, stk) == want);
             }
         }
+    }
 
     // a loop of awaits, and that the stack doesn't creep while it runs
-    for (int deferred = 0; deferred < 2; ++deferred)
+    for (int deferred = 0; deferred < 2; ++deferred) {
         for (int retain = 0; retain < 2; ++retain) {
             stores s = make_stores(retain, deferred);
             CHECK(count_found_sync(*s.sync, "k1", 1000) == 1000);
@@ -52,6 +54,7 @@ int main() {
             CHECK(ms::high_water(stk) == after_10);
             CHECK(loop_machine(*s.machine, "nope", 1000, stk) == 0);
         }
+    }
 
     // a caller that carries on after its callee suspended: the callee's frame
     // has to survive what the caller does to the stack
@@ -70,23 +73,27 @@ int main() {
     // forks: every provider, children inline and deferred
     {
         std::vector<str> keys;
-        for (int i = 0; i < 200; ++i)
+        for (int i = 0; i < 200; ++i) {
             keys.push_back(i % 3 == 0 ? "nope" : i % 3 == 1 ? "k1" : "k2");
+        }
         std::size_t        want = 133;
         static char        buf[200 * 16384];
         ms::mmap_provider  pooled(64 << 10, true), fresh(64 << 10, false);
         ms::arena_provider arena(buf, sizeof(buf), 16384);
-        for (int deferred = 0; deferred < 2; ++deferred)
+        for (int deferred = 0; deferred < 2; ++deferred) {
             for (int retain = 0; retain < 2; ++retain) {
                 stores s = make_stores(retain, deferred);
                 CHECK(fork_cursor(*s.cursor, keys.data(), keys.size(), sp) == want);
                 for (ms::stack_provider* p : {static_cast<ms::stack_provider*>(&pooled),
                                               static_cast<ms::stack_provider*>(&fresh),
-                                              static_cast<ms::stack_provider*>(&arena)})
-                    for (int twice = 0; twice < 2; ++twice)
+                                              static_cast<ms::stack_provider*>(&arena)}) {
+                    for (int twice = 0; twice < 2; ++twice) {
                         CHECK(fork_machine(
                                   *s.machine, keys.data(), keys.size(), *p, stk) == want);
+                    }
+                }
             }
+        }
         // the second and later forks reuse the first's stacks
         CHECK(pooled.mapped == 200);
         // with a scribbling parent in every child

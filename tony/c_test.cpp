@@ -23,10 +23,12 @@ constexpr x29::completion_table<2> root_table{
     [](async_cont* c, int how) noexcept -> async_next {
         auto* r = static_cast<root*>(c);
         r->how  = how;
-        if (how == C_VALUE)
+        if (how == C_VALUE) {
             r->value.adopt();
-        if (how == C_ERROR)
+        }
+        if (how == C_ERROR) {
             r->error.adopt();
+        }
         return {};
     },
     {[](async_cont* c) noexcept -> void* {

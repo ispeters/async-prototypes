@@ -68,18 +68,22 @@ void all(const char* name, int n) {
                 ts::associate(ex::starts_on(s, ex::just()), scope.get_token()),
                 [&] { ++ran; });
         };
-        if (run<P>(ts::when_all(work(), work(), work())) != 0)
+        if (run<P>(ts::when_all(work(), work(), work())) != 0) {
             std::abort();
+        }
         if (run<P>(ts::associate(ex::starts_on(s, ex::just_error(1)),
-                                 scope.get_token())) != 2)
+                                 scope.get_token())) != 2) {
             std::abort();
+        }
         ex::sync_wait(scope.join());
         scope.close();
-        if (run<P>(ts::associate(ex::starts_on(s, ex::just()), scope.get_token())) != 1)
+        if (run<P>(ts::associate(ex::starts_on(s, ex::just()), scope.get_token())) != 1) {
             std::abort();
+        }
     }
-    if (ran != 3 * n)
+    if (ran != 3 * n) {
         std::abort();
+    }
     std::printf("%-22s %d iterations\n", name, n);
 }
 

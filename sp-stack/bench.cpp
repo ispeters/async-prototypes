@@ -40,10 +40,11 @@ struct setup {
 // column: 's' synchronous, 'c' cursor, 'm' machine stack
 static std::size_t one_root_each(setup& u, char column, long n) {
     std::size_t sum = 0;
-    for (long i = 0; i < n; ++i)
+    for (long i = 0; i < n; ++i) {
         sum += column == 's'   ? call_sync(*u.s.sync, u.key)
                : column == 'c' ? call_cursor(*u.s.cursor, u.key, u.sp)
                                : call_machine(*u.s.machine, u.key, u.stk);
+    }
     return sum;
 }
 
@@ -76,14 +77,16 @@ static void times(long n) {
                 }
                 t[col++] = best_ns(n, [&] {
                     if ((nested ? one_root(u, c, n) : one_root_each(u, c, n)) !=
-                        std::size_t(n))
+                        std::size_t(n)) {
                         std::abort();
+                    }
                 });
             }
-            if (p.deferred)
+            if (p.deferred) {
                 std::printf("  %-18s %12s %12.1f %12.1f\n", p.name, "-", t[1], t[2]);
-            else
+            } else {
                 std::printf("  %-18s %12.1f %12.1f %12.1f\n", p.name, t[0], t[1], t[2]);
+            }
         }
     }
 }
@@ -115,8 +118,9 @@ static void forks(std::size_t kids, long reps) {
                     std::size_t got =
                         p ? fork_machine(*u.s.machine, keys.data(), kids, *p, u.stk)
                           : fork_cursor(*u.s.cursor, keys.data(), kids, u.sp);
-                    if (got != kids)
+                    if (got != kids) {
                         std::abort();
+                    }
                 }
             });
         };
@@ -162,8 +166,9 @@ static void sizes() {
                     p.name,
                     async_high_water - sizeof(async_slab),
                     peak);
-        if (live)
+        if (live) {
             std::printf(", %4zu B held while suspended", live);
+        }
         std::printf("\n");
     }
 }
@@ -180,8 +185,9 @@ int main(int argc, char** argv) {
             nested ? one_root(u, argv[2][0], n) : one_root_each(u, argv[2][0], n);
         return got == std::size_t(n) ? 0 : 1;
     }
-    if (argc >= 2 && !std::strcmp(argv[1], "sizes"))
+    if (argc >= 2 && !std::strcmp(argv[1], "sizes")) {
         return sizes(), 0;
+    }
     long n = argc > 1 ? std::atol(argv[1]) : 2000000;
     times(n);
     forks(1000, std::max(1L, n / 20000));

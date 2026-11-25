@@ -52,10 +52,12 @@ struct nodst {}; // rows 3 and 4: the destinations travel in the record
 // Runs completion `how` of frame f. Column A needs it wherever a `how` arrives.
 template <class H, class F>
 [[gnu::always_inline]] inline H dispatch(F* f, int how) noexcept {
-    if (how == VAL)
+    if (how == VAL) {
         return f->template after<VAL>();
-    if (how == ERR)
+    }
+    if (how == ERR) {
         return f->template after<ERR>();
+    }
     return f->template after<STP>();
 }
 
@@ -91,13 +93,15 @@ struct colA {
     }
     template <class F>
     [[gnu::always_inline]] static hA fall_through(hA h, F* f) noexcept {
-        if (h.next == static_cast<recA*>(f))
+        if (h.next == static_cast<recA*>(f)) {
             return dispatch<hA>(f, h.how);
+        }
         return h;
     }
     static void run(hA h) noexcept {
-        while (h.next)
+        while (h.next) {
             h = h.next->resume(h.next, h.how);
+        }
     }
 };
 
@@ -108,10 +112,11 @@ struct V1A : colA<recA> {
     using dst = slot<T>*;
     template <int I, class T>
     static void* dest(slot<T>* d, recA*) noexcept {
-        if constexpr (I == VAL)
+        if constexpr (I == VAL) {
             return &d->value;
-        else
+        } else {
             return &d->error;
+        }
     }
     template <class F>
     static void wire(F* f) noexcept {
@@ -199,13 +204,15 @@ struct V4A {
     }
     template <class F>
     [[gnu::always_inline]] static hA4 fall_through(hA4 h, F* f) noexcept {
-        if (h.next == static_cast<recA4*>(f))
+        if (h.next == static_cast<recA4*>(f)) {
             return dispatch<hA4>(f, h.how);
+        }
         return h;
     }
     static void run(hA4 h) noexcept {
-        while (h.next)
+        while (h.next) {
             h = h.next->t->resume(h.next, h.how);
+        }
     }
 };
 
@@ -232,12 +239,15 @@ struct colB {
     template <class F>
     [[gnu::always_inline]] static U* fall_through(U* h, F* f) noexcept {
         Rec* r = static_cast<Rec*>(f);
-        if (h == &r->s[VAL])
+        if (h == &r->s[VAL]) {
             return f->template after<VAL>();
-        if (h == &r->s[ERR])
+        }
+        if (h == &r->s[ERR]) {
             return f->template after<ERR>();
-        if (h == &r->s[STP])
+        }
+        if (h == &r->s[STP]) {
             return f->template after<STP>();
+        }
         return h;
     }
 };
@@ -261,8 +271,9 @@ inline void wireB(F* f) noexcept {
 }
 struct colB1 : colB<rsB, recB> {
     static void run(rsB* h) noexcept {
-        while (h)
+        while (h) {
             h = h->run(h);
+        }
     }
 };
 
@@ -273,10 +284,11 @@ struct V1B : colB1 {
     using dst = slot<T>*;
     template <int I, class T>
     static void* dest(slot<T>* d, recB*) noexcept {
-        if constexpr (I == VAL)
+        if constexpr (I == VAL) {
             return &d->value;
-        else
+        } else {
             return &d->error;
+        }
     }
     template <class F>
     static void wire(F* f) noexcept {
@@ -322,8 +334,9 @@ struct V3B : colB<rpB, recB3> {
     template <class T>
     using dst = nodst;
     static void run(rpB* h) noexcept {
-        while (h)
+        while (h) {
             h = h->run(h);
+        }
     }
     template <int I, class T>
     static void* dest(nodst, recB3* k) noexcept {
@@ -367,8 +380,9 @@ struct V4B : colB<sB, recB4> {
     template <class T>
     using dst = nodst;
     static void run(sB* h) noexcept {
-        while (h)
+        while (h) {
             h = (*h)->run(h);
+        }
     }
     template <int I, class T>
     static void* dest(nodst, recB4* k) noexcept {

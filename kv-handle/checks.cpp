@@ -22,12 +22,14 @@ struct root_cont : async_cont {
         };
     }
     void drive(async_next n) noexcept {
-        if (n.next == this)
+        if (n.next == this) {
             how = n.how;
-        else
+        } else {
             async_run(n);
-        while (how == ASYNC_PENDING)
+        }
+        while (how == ASYNC_PENDING) {
             CHECK(async_run_pending() > 0);
+        }
     }
 };
 
@@ -48,8 +50,9 @@ static int get_handle(const kv_store_h& s, const char* key, value_t* v) {
         hget_fn fn = s.get(key);
         k.drive(fn.connect(handle_rcvr<value_t>{&out, &k, sp}).start());
     }
-    if (k.how == ASYNC_VALUE)
+    if (k.how == ASYNC_VALUE) {
         *v = std::move(out.value);
+    }
     out.destroy(k.how);
     async_stack_destroy(sp);
     return k.how;
@@ -82,8 +85,9 @@ static int get_cxx26(Sender snd, std::size_t* len) {
                            }),
                            rcvr{&how, len});
     ex::start(op);
-    while (how == ASYNC_PENDING)
+    while (how == ASYNC_PENDING) {
         CHECK(async_run_pending() > 0);
+    }
     return how;
 }
 
@@ -98,8 +102,9 @@ static int get_cxx26_strand(Sender snd, std::size_t* len) {
                         }),
                         strand_rcvr{{&how, len}, &sp});
         ex::start(op);
-        while (how == ASYNC_PENDING)
+        while (how == ASYNC_PENDING) {
             CHECK(async_run_pending() > 0);
+        }
     }
     async_stack_destroy(sp);
     return how;
@@ -154,7 +159,7 @@ int main() {
                                     {'a', 'n'},
                                     {'c', 'c'},
                                     {'c', 'n'}};
-    for (const auto& p : pairs)
+    for (const auto& p : pairs) {
         for (bool deferred : {false, true}) {
             stores s = make_stores(p[0], p[1], true, deferred);
             for (const char* key : {"k1", "k1", "kx"}) {
@@ -182,6 +187,7 @@ int main() {
                 }
             }
         }
+    }
 
     // a throwing factory is an error completion, for both kinds of receiver
     {

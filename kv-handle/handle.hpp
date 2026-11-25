@@ -106,8 +106,9 @@ async_next start(Sender&& snd, slot<T>* out, async_cont* k, async_sp sp) noexcep
     auto saved = std::exchange(tl_starting, start_guard{f, &how});
     ex::start(f->op);
     tl_starting = saved;
-    if (how == ASYNC_PENDING)
+    if (how == ASYNC_PENDING) {
         return {nullptr, ASYNC_PENDING};
+    }
     f->op.~op_t();
     async_pop(&top, f);
     return {k, how};
@@ -129,10 +130,11 @@ struct thunk_op {
 
 template <class T, class S>
 auto hconnect(S&& snd, handle_rcvr<T> r) noexcept {
-    if constexpr (handle_sender<S, T>)
+    if constexpr (handle_sender<S, T>) {
         return std::forward<S>(snd).connect(r);
-    else
+    } else {
         return thunk_op<T, S>{std::forward<S>(snd), r};
+    }
 }
 
 // ---- connect, for a C++26 receiver: the operation-state adaptor --------------
@@ -161,8 +163,9 @@ struct legacy_op : async_cont {
     legacy_op(legacy_op&&) = delete;
     ~legacy_op() {
         out.destroy(how);
-        if (root)
+        if (root) {
             async_stack_destroy(root);
+        }
     }
 
     async_sp cursor() noexcept {
@@ -190,12 +193,13 @@ struct legacy_op : async_cont {
     }
     void complete(int h) noexcept {
         how = h;
-        if (h == ASYNC_VALUE)
+        if (h == ASYNC_VALUE) {
             ex::set_value(std::move(rcvr), std::move(out.value));
-        else if (h == ASYNC_ERROR)
+        } else if (h == ASYNC_ERROR) {
             ex::set_error(std::move(rcvr), std::move(out.error));
-        else
+        } else {
             ex::set_stopped(std::move(rcvr));
+        }
     }
 };
 
@@ -261,10 +265,11 @@ class hfn<T(Args...) const&> {
         // A factory that can't take rvalues borrows the curried arguments.
         static constexpr bool borrows = !std::invocable<Factory, const Self&, Args...>;
         static decltype(auto) make(const Self& self, Args&... args) {
-            if constexpr (borrows)
+            if constexpr (borrows) {
                 return Factory()(self, args...);
-            else
+            } else {
                 return Factory()(self, std::move(args)...);
+            }
         }
         using sender_t =
             decltype(make(std::declval<const Self&>(), std::declval<Args&>()...));
@@ -311,8 +316,9 @@ class hfn<T(Args...) const&> {
                         return fail(out, k);
                     }
                     async_next n = f->snd.connect(handle_rcvr<T>{out, f, top}).start();
-                    if (n.next == f)
+                    if (n.next == f) {
                         return f->done(n.how);
+                    }
                     return n;
                 } else {
                     try {

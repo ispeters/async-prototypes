@@ -98,8 +98,9 @@ struct on_strand {
         next  n    = (*self->f)();
         MS_CLOBBER();
         // the callee left frames here
-        if (n.k != self->k)
+        if (n.k != self->k) {
             MS_LEAVE(n);
+        }
         return n;
     }
 };
@@ -110,8 +111,9 @@ next enter(void* sp, cont* k, F&& f) noexcept {
 }
 
 inline void run(next n) noexcept {
-    if (n.k)
+    if (n.k) {
         ms_run(n.k, n.how);
+    }
 }
 
 // The event queue: a continuation deferred here is run later, from the loop.

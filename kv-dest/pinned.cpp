@@ -33,15 +33,17 @@ struct proot : V::rec {
     int          how = PENDING;
     proot() noexcept { V::wire(this); }
     ~proot() {
-        if (how == VAL)
+        if (how == VAL) {
             out.value.~pinned();
+        }
     }
     template <int I>
     void* my_dest() noexcept {
-        if constexpr (I == VAL)
+        if constexpr (I == VAL) {
             return &out.value;
-        else
+        } else {
             return &out.error;
+        }
     }
     template <int I>
     typename V::handle after() noexcept {
@@ -60,14 +62,14 @@ int run(const char* key) {
     };
     async_sp           sp = async_stack_create();
     typename V::handle n;
-    if constexpr (V::row == 1)
+    if constexpr (V::row == 1) {
         n = filter_body<V, pinned>(link<V, pinned>{&r.out, &r}, fb, str(key), child, sp);
-    else if constexpr (V::row == 5)
+    } else if constexpr (V::row == 5) {
         n = filter_body<V, pinned>(
             static_link<V, pinned>{&r.out, &r}, fb, str(key), child, sp);
-    else if constexpr (by_record<V>)
+    } else if constexpr (by_record<V>) {
         n = filter_body<V, pinned>(link<V, pinned>{nodst{}, &r}, fb, str(key), child, sp);
-    else {
+    } else {
         t.p[VAL] = &r.out.value;
         t.p[ERR] = &r.out.error;
         n = filter_body<V, pinned>(link<V, pinned>{&t, &r}, fb, str(key), child, sp);

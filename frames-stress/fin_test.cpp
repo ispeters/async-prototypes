@@ -24,8 +24,9 @@ struct fragile {
     fragile(const fragile& o) : s(o.s) { tick(); }
     fragile(fragile&& o) : s(std::move(o.s)) { tick(); }
     static void tick() {
-        if (countdown > 0 && --countdown == 0)
+        if (countdown > 0 && --countdown == 0) {
             throw std::runtime_error("fragile");
+        }
     }
 };
 
@@ -55,12 +56,13 @@ struct rcvr {
     }
     template <class E>
     void set_error(E&& e) && noexcept {
-        if constexpr (std::is_same_v<std::decay_t<E>, fragile>)
+        if constexpr (std::is_same_v<std::decay_t<E>, fragile>) {
             c->done("error " + e.s);
-        else if constexpr (std::is_same_v<std::decay_t<E>, int>)
+        } else if constexpr (std::is_same_v<std::decay_t<E>, int>) {
             c->done("error " + std::to_string(e));
-        else
+        } else {
             c->done("exception");
+        }
     }
     void set_stopped() && noexcept { c->done("stopped"); }
 };

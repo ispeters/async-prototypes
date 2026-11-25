@@ -78,10 +78,11 @@ union slot {
     slot() noexcept {}
     ~slot() {}
     void destroy(int how) noexcept {
-        if (how == ASYNC_VALUE)
+        if (how == ASYNC_VALUE) {
             value.~T();
-        else if (how == ASYNC_ERROR)
+        } else if (how == ASYNC_ERROR) {
             error.~exception_ptr();
+        }
     }
 };
 
@@ -91,15 +92,17 @@ class cache_entries {
     explicit cache_entries(bool retain = true) : retain_(retain) {}
     value_t find(const str& key) const {
         std::lock_guard lock(mutex_);
-        if (auto it = entries_.find(key); it != entries_.end())
+        if (auto it = entries_.find(key); it != entries_.end()) {
             return it->second;
+        }
         return std::nullopt;
     }
     void insert(str key, str value) {
         std::lock_guard lock(mutex_);
         // retain_ == false keeps every lookup a miss, for measuring the miss path
-        if (retain_)
+        if (retain_) {
             entries_.insert_or_assign(std::move(key), std::move(value));
+        }
     }
 
   private:

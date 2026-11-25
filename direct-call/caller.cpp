@@ -18,8 +18,9 @@ struct op_static {
         s->done   = true;
     }
     void start() noexcept {
-        if (Entry(key, cont{&resume, this}, &result))
+        if (Entry(key, cont{&resume, this}, &result)) {
             done = true;
+        }
     }
 };
 
@@ -35,8 +36,9 @@ struct op_dynamic {
         s->done   = true;
     }
     void start() noexcept {
-        if (entry(key, cont{&resume, this}, &result))
+        if (entry(key, cont{&resume, this}, &result)) {
             done = true;
+        }
     }
 };
 

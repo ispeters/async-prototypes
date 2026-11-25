@@ -14,10 +14,11 @@ struct root : V::rec {
 
     template <int I>
     void* my_dest() noexcept {
-        if constexpr (I == VAL)
+        if constexpr (I == VAL) {
             return &out.value;
-        else
+        } else {
             return &out.error;
+        }
     }
     template <int I>
     typename V::handle after() noexcept {
@@ -27,11 +28,11 @@ struct root : V::rec {
     // What an erased callee is passed for the destinations. Row 5 meets an
     // erased call here, so it builds row 2's table.
     typename V::template dst<T> dst(ptab& t) noexcept {
-        if constexpr (V::row == 1)
+        if constexpr (V::row == 1) {
             return &out;
-        else if constexpr (by_record<V>)
+        } else if constexpr (by_record<V>) {
             return nodst{};
-        else {
+        } else {
             t.p[VAL] = &out.value;
             t.p[ERR] = &out.error;
             return &t;
@@ -41,8 +42,9 @@ struct root : V::rec {
     void drive(typename V::handle n) noexcept {
         n = V::fall_through(n, this);
         V::run(n);
-        while (how == PENDING)
+        while (how == PENDING) {
             run_pending();
+        }
     }
 };
 
@@ -81,10 +83,11 @@ call_or_else(const store<V>& m, const str& key, const str& fb, async_sp sp) {
     };
     ptab t; // rows 2 and 5 only: lives as long as the root, as a parent's table must
     typename V::handle n;
-    if constexpr (V::row == 5)
+    if constexpr (V::row == 5) {
         n = filter_body<V, str>(static_link<V, str>{&r.out, &r}, fb, key, child, sp);
-    else
+    } else {
         n = filter_body<V, str>(link<V, str>{r.dst(t), &r}, fb, key, child, sp);
+    }
     r.drive(n);
     return r.how == VAL ? r.out.value.size() : 0;
 }
@@ -125,8 +128,9 @@ inline bool              error_path(int w) {
     return w == w_get_or_error || w == w_or_else_error || w == w_pass2_error;
 }
 inline std::size_t expected(int w) {
-    if (w <= w_get_miss)
+    if (w <= w_get_miss) {
         return 1;
+    }
     return error_path(w) ? 8 : 2; // "fallback" or "v1"
 }
 
@@ -175,8 +179,9 @@ struct rig final : rig_base {
     }
     std::size_t call() override {
         if (sync) {
-            if (w <= w_get_miss)
+            if (w <= w_get_miss) {
                 return call_get_sync<V>(*top, key);
+            }
             return call_get_or_sync<V>(*top, key, fb);
         }
         switch (w) {
@@ -202,8 +207,9 @@ inline rig_base* make_rig_from(tlist<Vs...>, int v, int w, bool deferred) {
     return r;
 }
 inline rig_base* make_rig(int v, int w, bool deferred) {
-    if (v < 0)
+    if (v < 0) {
         return new rig<V1A>(w, false, true);
+    }
     return make_rig_from(all_variants{}, v, w, deferred);
 }
 template <class... Vs>

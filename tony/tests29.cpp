@@ -23,15 +23,17 @@ struct imm_rcvr {
     imm_root* r;
     template <class Sig>
     void* destination() noexcept {
-        if constexpr (std::same_as<Sig, x29::set_value_t(pinned)>)
+        if constexpr (std::same_as<Sig, x29::set_value_t(pinned)>) {
             return r->v.address();
-        else
+        } else {
             return r->e.address();
+        }
     }
     template <class Sig>
     operation_handle complete() noexcept {
-        if constexpr (std::same_as<Sig, x29::set_value_t(pinned)>)
+        if constexpr (std::same_as<Sig, x29::set_value_t(pinned)>) {
             r->v.adopt();
+        }
         return {};
     }
     x29::empty_env get_env() const noexcept { return {}; }
@@ -46,8 +48,9 @@ struct loop_rcvr {
     }
     template <class Sig>
     operation_handle complete() noexcept {
-        if constexpr (std::same_as<Sig, x29::set_value_t(int)>)
+        if constexpr (std::same_as<Sig, x29::set_value_t(int)>) {
             got->adopt();
+        }
         loop->finish();
         return {};
     }

@@ -182,10 +182,11 @@ struct legacy_op : async_cont {
 
     void start() & noexcept {
         async_next n = snd.connect(handle_rcvr<T>{&out, this, cursor()}).start();
-        if (n.next == this)
+        if (n.next == this) {
             complete(n.how);
-        else
-            async_run(n); // this operation is the bottom of the stack
+        } else { // this operation is the bottom of the stack
+            async_run(n);
+        }
     }
     void complete(int h) noexcept {
         how = h;

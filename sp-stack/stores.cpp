@@ -275,7 +275,8 @@ struct count_frame : Cont {
     union {
         str arg;
     };
-    slot<value_t> v; // the await's result, for one iteration
+    // the await's result, for one iteration
+    slot<value_t> v;
     count_frame() noexcept {}
     ~count_frame() {}
 

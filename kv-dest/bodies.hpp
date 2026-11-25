@@ -213,10 +213,11 @@ struct filter_frame : V::rec {
 
     template <int I>
     void* my_dest() noexcept {
-        if constexpr (I == VAL)
-            return up.template dest<VAL>(); // passed through
-        else
-            return &own.error; // filtered
+        if constexpr (I == VAL) { // passed through
+            return up.template dest<VAL>();
+        } else { // filtered
+            return &own.error;
+        }
     }
     template <int I>
     typename V::handle after() noexcept {

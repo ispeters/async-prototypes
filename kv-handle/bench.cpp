@@ -195,8 +195,9 @@ static void counts(const config& c, const char* what, bool retain, bool deferred
     stores   s  = make_stores(c.cache_kind, c.mem_kind, retain, deferred);
     async_sp sp = async_stack_create();
     str      key("k1");
+    // warm the cache, so the measured call is a hit
     if (retain)
-        call(c, s, key, sp); // warm the cache, so the measured call is a hit
+        call(c, s, key, sp);
     str::key_copies = str::key_moves = str::val_copies = str::val_moves = 0;
     g_news = g_new_bytes  = 0;
     async_high_water      = sizeof(async_slab);

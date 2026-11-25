@@ -454,8 +454,9 @@ template <class Backing>
     using frame = cache_frame<Backing>;
     // `hit` is the return object: it's constructed in the caller's slot
     value_t& hit = *::new (&out->value) value_t(entries.find(key));
+    // co_return hit
     if (hit)
-        return {k, ASYNC_VALUE}; // co_return hit
+        return {k, ASYNC_VALUE};
     hit.~value_t();
     async_sp top = sp;
     auto*    f   = ::new (async_push(&top, sizeof(frame))) frame;

@@ -97,8 +97,9 @@ struct on_strand {
         auto* self = static_cast<on_strand*>(v);
         next  n    = (*self->f)();
         MS_CLOBBER();
+        // the callee left frames here
         if (n.k != self->k)
-            MS_LEAVE(n); // the callee left frames here
+            MS_LEAVE(n);
         return n;
     }
 };

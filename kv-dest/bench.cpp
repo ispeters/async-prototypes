@@ -28,8 +28,9 @@ static void records(tlist<Vs...>) {
 
 static void counts(int v, int w, bool deferred) {
     rig_base* r = make_rig(v, w, deferred);
+    // warm the cache, so the measured call is a hit
     if (w == w_get_hit)
-        r->call(); // warm the cache, so the measured call is a hit
+        r->call();
     str::key_copies = str::key_moves = str::val_copies = str::val_moves = 0;
     async_high_water = sizeof(async_slab);
     std::size_t got  = r->call();

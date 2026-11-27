@@ -86,6 +86,54 @@ using sigs_t = completions_of_t<S, Env>;
 template <class A, class B>
 inline constexpr bool same_sigs = A() == B();
 
+// A receiver that records which of many receiver types completed.
+template <std::size_t I>
+struct tally_rcvr {
+    std::size_t* ran;
+    template <class Sig>
+    TH_INLINE no_operation complete() noexcept {
+        *ran = I;
+        return {};
+    }
+};
+template <std::size_t I>
+using tally_handle = operation_handle<tally_rcvr<I>, set_value_t()>;
+
+template <class... Hs>
+constexpr std::size_t alternatives_in(type_list<Hs...>) noexcept {
+    return sizeof...(Hs);
+}
+
+// Where N different typed handles meet, the common type is one choice of all
+// N in VARIANT mode, and the erased handle otherwise; either way each runs.
+// They all run through one function, as a merge point settles its choice in
+// one place: settled at N call sites, an N-way choice is N * N branches to
+// compile.
+template <class Wide>
+[[gnu::noinline]] void run_wide(Wide w) noexcept {
+    run(w);
+}
+template <std::size_t... I>
+void check_wide_choice(std::index_sequence<I...>) {
+    using wide = common_handle_t<tally_handle<I>...>;
+#if TH_MODE == TH_VARIANT
+    static_assert(std::same_as<wide, choice<tally_handle<I>...>>);
+    static_assert(sizeof(wide) <= 2 * sizeof(void*));
+#else
+    static_assert(std::same_as<wide, erased_handle>);
+#endif
+    // A table, not a fold over I: Clang limits a fold to 256 operands.
+    using make_t                   = wide (*)(std::size_t*) noexcept;
+    static constexpr make_t make[] = {[](std::size_t* ran) noexcept -> wide {
+        return tally_handle<I>(tally_rcvr<I>{ran});
+    }...};
+    for (std::size_t i = 0; i < sizeof...(I); ++i) {
+        std::size_t ran = sizeof...(I);
+        run_wide(make[i](&ran));
+        CHECK(ran == i);
+    }
+}
+
 int main() {
     auto inc      = [](int x) noexcept { return x + 1; };
     using int_sig = set_value_t(int);
@@ -219,6 +267,16 @@ int main() {
         run_root(
             when_all(just_error(string("first")), just_error(string("second"))),
             [](auto& st) { CHECK(st.template get<set_error_t(string)>() == "first"); });
+        // errors of three types: five outcomes meet where the children arrive
+        run_root(
+            when_all(just_error(string("s")), just_error(1), just_error(2.0), just(3)),
+            [](auto& st) { CHECK(st.template get<set_error_t(string)>() == "s"); });
+        run_root(
+            when_all(just(3), just_error(1), just_error(2.0), just_error(string("s"))),
+            [](auto& st) { CHECK(st.template get<set_error_t(int)>() == 1); });
+        run_root(
+            when_all(just(3), just_error(2.0), just_error(1), just_error(string("s"))),
+            [](auto& st) { CHECK(st.template get<set_error_t(double)>() == 2.0); });
     }
     { // an erased boundary in the middle of a chain, and with two completions
         run_root(then(erase_boundary(then(just(1), inc)), inc),
@@ -375,6 +433,28 @@ int main() {
         static_assert(std::same_as<complete_t_, no_operation>);
 #endif
         static_assert(sizeof(erased_handle) == 2 * sizeof(void*));
+    }
+
+    // Where many outcomes meet. when_all with errors of three types arrives in
+    // one of five ways (nothing yet, stopped, or an error of each type; never
+    // values, since three of its children can't produce any); in VARIANT mode
+    // that's a choice of all five. Then 257 different typed handles meeting at
+    // once.
+    {
+        using S  = decltype(when_all(
+            just_error(string("s")), just_error(1), just_error(2.0), just(3)));
+        using R  = root_rcvr<completions_of_t<S, empty_env>>;
+        using op = connect_result_t<S, R>;
+#if TH_MODE == TH_VARIANT
+        static_assert(is_choice<typename op::arrive_t>);
+        static_assert(
+            alternatives_in(typename alternatives<typename op::arrive_t>::type()) == 5);
+#elif TH_MODE == TH_TYPED || TH_MODE == TH_ERASED
+        static_assert(std::same_as<typename op::arrive_t, erased_handle>);
+#endif
+        // 257: more than a byte can index, and more operands than Clang allows
+        // a fold expression.
+        check_wide_choice(std::make_index_sequence<257>());
     }
 
     std::printf("%s checks pass\n", mode_name());

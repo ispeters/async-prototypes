@@ -39,7 +39,7 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 | `payload.hpp` | What a completion carries and where it is constructed; signature lists; originating a completion (`set_value`, `set_error`, `set_stopped`) |
 | `env.hpp` | Environments, `never_stop_token`, and a simplified `inplace_stop_source` with callbacks |
 | `algos.hpp` | `just`, `just_error`, `just_stopped`, `just_unless_stopped`; `then`, `upon_error`, `upon_stopped`; `let_value`, `let_error`, `let_stopped`; `when_all` of any number of children; `repeat_until` (stdexec's, not the standard's); an erased boundary; a root. Written once for every mode |
-| `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, and which handle types come back |
+| `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, and many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`) |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
 
 ## Four modes
@@ -54,7 +54,7 @@ depend on it.
 | `EAGER` (0) | is a plain call, nesting as C++26 does; the closest to `tony/`'s C++29 column, which erases only at boundaries | — |
 | `ERASED` (1) | returns `operation_handle<>` | erased |
 | `TYPED` (2) | returns the typed handle | erased |
-| `VARIANT` (3) | returns the typed handle | a `choice<Hs...>` of up to four typed handles, with an index |
+| `VARIANT` (3) | returns the typed handle | a `choice<Hs...>` of every typed handle that can come back, with an index |
 
 ## Completions and their payloads
 
@@ -139,7 +139,7 @@ the cell gives a range, GCC's count first.
    erased whichever outcome happens, so the common path pays too. (Before
    measuring, Claude had expected this cost to be small because the error
    side is cold. It isn't.)
-4. **A bounded choice recovers it with Clang, and most of it with GCC.** In
+4. **A choice recovers it with Clang, and most of it with GCC.** In
    VARIANT mode the same completion is `choice<value handle, error handle>`,
    and following it branches on an index, each branch carrying on at compile
    time: `chain4_throwing` is 35 with Clang (EAGER 35) and 67 with GCC
@@ -167,7 +167,7 @@ the cell gives a range, GCC's count first.
 7. **`when_all`'s fan-in is a merge.** Its `arrive` has several outcomes
    (nothing yet, values, stopped, an error), so in TYPED mode it returns an
    erased handle: one indirect call per `when_all`, with both compilers. In
-   VARIANT mode it is a `choice` while there are at most four outcomes. (In
+   VARIANT mode it is a `choice` of all of them. (In
    the earlier version GCC removed that indirect call; it no longer does.)
 
 ### The stack
@@ -193,13 +193,16 @@ machine stack from inside the loop's body:
 
 ### Types
 
-9. **The types stay small.** A typed handle is one pointer. A `choice` is at
-   most four of them plus an index. The common type of two different typed
-   handles is erased (TYPED) or a `choice` (VARIANT), so no algorithm threads
-   an open set of continuation types through its branches, as Robert's branch
-   had to. `when_all` with several error types has more than four outcomes,
-   so in VARIANT mode it falls back to the erased handle (Reading: not
-   measured).
+9. **The types stay small.** A typed handle is one pointer. A `choice` is
+   one alternative's storage plus an index, a byte up to 256 alternatives, so
+   a `choice` of one-pointer handles is two words however many there are
+   (checked for 257). The common type of two different typed handles is
+   erased (TYPED) or a `choice` (VARIANT), so no algorithm threads an open set
+   of continuation types through its branches, as Robert's branch had to:
+   the alternatives are the outcomes of one place where outcomes meet, which
+   its completion signatures bound. `when_all` with errors of three types
+   arrives in one of five ways, and in VARIANT mode that's a five-way
+   `choice`.
 10. **Typed handles break return-type deduction cycles; nesting doesn't.**
     In EAGER mode `repeat_until`'s `again()` can't deduce its own return type,
     because a restart nests a call that ends in `again()`; it has to be named
@@ -208,6 +211,40 @@ machine stack from inside the loop's body:
     A compile-fail test (`typed_handle.deduced.0`) checks the first, and
     three programs that must compile (`deduced.1` to `deduced.3`) the
     second.
+11. **A `choice` needs no limit on its alternatives; what it costs is
+    compile time.** The first version capped a `choice` at four alternatives
+    (`TH_MAX_CHOICE`) and erased beyond that; nothing recorded why four. No
+    check or scenario here reached the cap: lifting it left every mode's code
+    unchanged with Clang, and with GCC changed only VARIANT's block layout,
+    with the same instruction and indirect-branch counts in every scenario.
+    The limits left are the compilers':
+    - *Fold expressions.* Clang refuses a fold over more than 256 operands
+      by default, so lookups in a pack of alternatives go through an array
+      instead (`pack_index`, `any_of` and `all_of` in `handle.hpp`).
+    - *Instantiation depth.* `visit` halves its range at each step, so its
+      depth grows with the logarithm of the number of alternatives.
+      `common_handle_t` still folds its arguments one at a time, so one
+      `common_handle_t` naming about 900 handles exceeds GCC's default depth
+      (failed at 1,000). An algorithm names a few.
+    - *Compile time,* measured by compiling `checks.cpp` in VARIANT mode with
+      a `choice` of N typed handles, each converted into it once and all
+      settled in one function (GCC 13.3 / Clang 18.1, one run each):
+
+      | N | Front end only | `-O2` |
+      |---|---|---|
+      | 2 | 1.7 / 2.4 s | 4.1 / 4.2 s |
+      | 100 | 2.3 / 2.7 s | 5.3 / 6.1 s |
+      | 200 | 3.3 / 5.6 s | 8.8 / 8.4 s |
+      | 400 | 12.5 / 19.5 s | 35.6 / 25.5 s |
+
+      It grows faster than the square of N. Forming the 400-way type took
+      about a second; most of the rest was converting each handle into it,
+      whose constraint and index each look through all N alternatives.
+      Finding the index by deduction from base classes tagged with their
+      positions saved about a third at N = 400 and was left out. Settling
+      the same N-way `choice` at N call sites, where each is inlined, costs
+      N × N branches to compile: an earlier version of the check took 150 s
+      with GCC at N = 300.
 
 ### Environments and stop tokens
 
@@ -231,30 +268,30 @@ root, with leaves that don't ask. Same measurements as above.
 | `boundary_checked` | 88 / 80 | 113 / 99 | 98 / 86 | 99 / 78 | 3 / 6 / 4 / 3 |
 | `repeat_checked`: per iteration | 31.5 / 40 | 54 / 53 | 47 / 47 | 38 / 34 | 0 / 3 / 2 / 0 |
 
-11. **Forwarding environments costs nothing where nothing asks.** A leaf
+12. **Forwarding environments costs nothing where nothing asks.** A leaf
     that asks a token which can't be stopped compiles to `just`:
     `chain4_unstoppable` costs what `chain4` does, because
     `never_stop_token::stop_possible()` is a constant. (When environments
     were added, the only scenario whose counts changed was `both`, by 3 or 4
     instructions: `when_all` constructs a stop source of its own even under
     a parent that can't be stopped.)
-12. **Every leaf that can be stopped is a place where outcomes meet.** Asking
+13. **Every leaf that can be stopped is a place where outcomes meet.** Asking
     a live token adds 33 / 35 instructions to `chain4` in EAGER mode. In TYPED
     mode the leaf's branch (stopped, or a value) is erased: +46 / +55 and an
     indirect call. In VARIANT mode it's a `choice`: +38 / +45, no indirect
     call. So stop tokens make points 3 and 4 above matter more, not less.
-13. **Forwarding a parent's stop into `when_all` costs more than the rest of
+14. **Forwarding a parent's stop into `when_all` costs more than the rest of
     `when_all`:** 59 to 84 instructions (`both_live` against `both`), in
     every mode, for registering and deregistering one callback, which here is
     two round trips through a spin lock. The leaves' own checks then add
     only 9 to 34 more (`both_checked`).
-14. **Across the erased boundary the stop token costs one indirect call,**
+15. **Across the erased boundary the stop token costs one indirect call,**
     the query function in the record's table, and 18 or 22 instructions in
     EAGER mode (`boundary_checked` against `boundary`).
-15. **A loop that asks every iteration** costs 12 / 11 more per iteration in
+16. **A loop that asks every iteration** costs 12 / 11 more per iteration in
     VARIANT mode, where the static loop still runs with no indirect call,
     and 18 / 15 in TYPED mode, with a second indirect call per iteration.
-16. **Receivers stay one pointer.** The root's stop token lives in its state,
+17. **Receivers stay one pointer.** The root's stop token lives in its state,
     not in its receiver: a receiver holding a token as well would be two
     words, and couldn't be erased into `{function, data}` (the conversion's
     `static_assert`). Everything an environment holds has to live in an
@@ -266,7 +303,7 @@ Against this experiment's earlier versions, in which each sender had one
 value type, `then`'s function returned a value, errors were
 `exception_ptr`, and `when_all` had two children:
 
-17. **Lines.** `algos.hpp` grew from 734 to 1,192 lines; the new
+18. **Lines.** `algos.hpp` grew from 734 to 1,192 lines; the new
     `payload.hpp` is 406 (signature lists, payloads, and originating
     completions); `handle.hpp` shrank from 527 to 510 (its completion
     helpers moved). By algorithm, counting each family once:
@@ -282,17 +319,17 @@ value type, `then`'s function returned a value, errors were
 
     Before building it, Claude estimated about 200 lines of signature
     machinery and `algos.hpp` roughly doubling.
-18. **Compile time:** `bench.cpp` at `-O2` went from 1.7 s to 1.9 s with GCC
+19. **Compile time:** `bench.cpp` at `-O2` went from 1.7 s to 1.9 s with GCC
     and from 1.8 s to 2.7 s with Clang (one run each; Reading: mostly
     stdexec's headers).
-19. **Run time didn't get worse, mostly.** Of the scenarios measured before,
+20. **Run time didn't get worse, mostly.** Of the scenarios measured before,
     most cost the same or fewer instructions now; GCC's `let` went from 9 to 17 and its
     EAGER `chain4_throwing` from 42 to 51, and Clang's EAGER `repeat` from
     24 to 34 per iteration, because Clang stopped turning its recursion into
     a sibling call. (Reading: the general versions keep payloads in storage
     that the arriving completion identifies, with no engaged flag, where the
     earlier versions wrote one; the drop wasn't isolated.)
-20. **Where the destination decisions showed:**
+21. **Where the destination decisions showed:**
     - *One aggregate per signature:* `when_all` constructs a child's single
       non-reference value straight into its result, but a child with several
       values or a reference stages them and moves or copies them in when all
@@ -320,11 +357,15 @@ value type, `then`'s function returned a value, errors were
   for one. Each stoppable leaf adds a place where outcomes meet, which makes
   how those are handled (erase or choose) more consequential.
 - Where outcomes meet, erase or branch is a real choice: erasing keeps the
-  types trivial and costs about as much as erasing everything; a bounded
-  `choice` costs little and keeps the types small. Robert's explosion came
-  from an unbounded set; bounding it at a few alternatives and erasing
-  beyond that looks enough for these algorithms, now in their general form.
-- Loops: with a bounded `choice` at the loop's branch they need no indirect
+  types trivial and costs about as much as erasing everything; a `choice`
+  costs little and keeps the types small. Robert's explosion came from
+  threading every reachable continuation type through every algorithm. What
+  prevents it here is merging where outcomes meet, not a cap on the merge:
+  a `choice` holds one meeting place's outcomes, which its completion
+  signatures bound, and the cap of four never came into play. Its real
+  limit is compile time, which grows quickly with width but is negligible at
+  the widths these algorithms produce.
+- Loops: with a `choice` at the loop's branch they need no indirect
   call, and their stack stays flat without the optimizer's help. That makes
   typed branches (VARIANT) worth more than erased ones (TYPED) twice over: on
   the path through the branch, and around loops.

@@ -10,8 +10,8 @@
 //   operation_handle<>         erased: two words, {function, data}; the
 //                              function delivers one signal to one target
 //   no_operation               typed: there is nothing to run
-//   choice<Hs...>              typed (VARIANT mode only): one of a few typed
-//                              handles, with an index saying which
+//   choice<Hs...>              typed (VARIANT mode only): one of several
+//                              typed handles, with an index saying which
 //
 // A typed handle for start_t() holds a pointer to the operation state, which
 // is immovable. A typed handle for a completion holds a copy of the receiver,
@@ -21,7 +21,7 @@
 //
 // Where two different typed handles meet (a branch that may complete either
 // way), the common type is the erased handle, or in VARIANT mode a choice of
-// up to TH_MAX_CHOICE typed handles. Following a chain stops at an
+// every typed handle that can come back. Following a chain stops at an
 // erased handle, at no_operation, or at a type already seen (a cycle). A
 // typed handle whose own chain can come back to it heads a loop of known
 // types, which runs as a loop. run() loops over erased handles until there
@@ -32,6 +32,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <tuple>
 #include <type_traits>
@@ -141,6 +142,42 @@ class operation_handle {
     target_type t_;
 };
 
+// Lookups over a pack go through an array rather than a fold expression or a
+// recursion, so a long pack meets neither Clang's limit on the operands of a
+// fold (256 by default) nor the limit on the depth of instantiation.
+template <bool... Bs>
+consteval bool all_of() noexcept {
+    constexpr bool b[] = {Bs..., true};
+    for (bool x : b) {
+        if (!x) {
+            return false;
+        }
+    }
+    return true;
+}
+template <bool... Bs>
+consteval bool any_of() noexcept {
+    constexpr bool b[] = {Bs..., false};
+    for (bool x : b) {
+        if (x) {
+            return true;
+        }
+    }
+    return false;
+}
+// Where H is in Hs, or sizeof...(Hs) if it isn't there.
+template <class H, class... Hs>
+consteval std::size_t pack_index() noexcept {
+    constexpr bool same[] = {std::same_as<H, Hs>..., true};
+    std::size_t    i      = 0;
+    while (!same[i]) {
+        ++i;
+    }
+    return i;
+}
+template <class H, class... Hs>
+inline constexpr bool in_pack = pack_index<H, Hs...>() < sizeof...(Hs);
+
 template <class... Hs>
 class choice;
 template <class H>
@@ -151,20 +188,26 @@ inline constexpr bool is_choice<choice<Hs...>> = true;
 template <class... Seen, class H>
 TH_INLINE erased_handle settle_(H h) noexcept;
 
-#ifndef TH_MAX_CHOICE
-    #define TH_MAX_CHOICE 4
-#endif
+// The smallest unsigned type that can index N alternatives.
+template <std::size_t N>
+using choice_index_t = std::conditional_t<
+    (N <= std::size_t(std::numeric_limits<unsigned char>::max()) + 1),
+    unsigned char,
+    std::conditional_t<(N <= std::size_t(std::numeric_limits<unsigned short>::max()) + 1),
+                       unsigned short,
+                       std::size_t>>;
 
-// One of a few typed handles (or no_operation). Following it branches on
+// One of several typed handles (or no_operation). Following it branches on
 // the index, and each branch carries on along its own chain at compile time.
+// There is no limit on the number of alternatives beyond the compiler's own.
 template <class... Hs>
 class choice {
-    static_assert(sizeof...(Hs) >= 2 && sizeof...(Hs) <= TH_MAX_CHOICE);
-    static_assert((std::is_trivially_copyable_v<Hs> && ...));
+    static_assert(sizeof...(Hs) >= 2);
+    static_assert(all_of<std::is_trivially_copyable_v<Hs>...>());
 
   public:
     template <class H>
-        requires(std::same_as<H, Hs> || ...)
+        requires in_pack<H, Hs...>
     TH_INLINE choice(H h) noexcept : index_(index_of<H>) {
         ::new (storage_) H(h);
     }
@@ -175,7 +218,7 @@ class choice {
 
     template <class F>
     TH_INLINE decltype(auto) visit(F f) const noexcept {
-        return visit_<0>(f);
+        return visit_<0, sizeof...(Hs)>(f);
     }
 
     operator erased_handle() const noexcept {
@@ -183,34 +226,31 @@ class choice {
     }
 
   private:
-    template <class H, std::size_t I = 0, class First, class... Rest>
-    static constexpr unsigned char find() noexcept {
-        if constexpr (std::same_as<H, First>) {
-            return I;
-        } else {
-            return find<H, I + 1, Rest...>();
-        }
-    }
-    template <class H>
-    static constexpr unsigned char index_of = find<H, 0, Hs...>();
+    using index_t = choice_index_t<sizeof...(Hs)>;
 
-    template <std::size_t I, class F>
+    template <class H>
+    static constexpr index_t index_of = index_t(pack_index<H, Hs...>());
+
+    // Calls f with the alternative whose index is in [Lo, Hi), halving the
+    // range at each step, so the depth of instantiation grows with the
+    // logarithm of the number of alternatives, not with the number itself.
+    template <std::size_t Lo, std::size_t Hi, class F>
     TH_INLINE decltype(auto) visit_(F& f) const noexcept {
-        using H    = std::tuple_element_t<I, std::tuple<Hs...>>;
-        const H& h = *std::launder(reinterpret_cast<const H*>(storage_));
-        if constexpr (I + 1 == sizeof...(Hs)) {
-            return f(h);
+        if constexpr (Hi - Lo == 1) {
+            using H = std::tuple_element_t<Lo, std::tuple<Hs...>>;
+            return f(*std::launder(reinterpret_cast<const H*>(storage_)));
         } else {
-            if (index_ == I) {
-                return f(h);
+            constexpr std::size_t mid = Lo + (Hi - Lo) / 2;
+            if (index_ < mid) {
+                return visit_<Lo, mid>(f);
             }
-            return visit_<I + 1>(f);
+            return visit_<mid, Hi>(f);
         }
     }
 
     // A tagged union by hand: GCC 13 optimizes std::variant less well here.
     alignas(Hs...) unsigned char storage_[std::max({sizeof(Hs)...})];
-    unsigned char index_;
+    index_t index_;
 };
 
 // ---- Cycles of known types ------------------------------------------------
@@ -252,7 +292,7 @@ struct reaches<Target, hlist<Visited...>, H> {
     }
     template <class... Ss>
     static constexpr bool any(hlist<Ss...>) noexcept {
-        return (via<Ss>() || ...);
+        return any_of<via<Ss>()...>();
     }
     static constexpr bool value = any(typename successors<H>::type{});
 };
@@ -351,8 +391,7 @@ TH_INLINE void run(H h) noexcept {
 }
 
 // The common type of handles: the same handle; or, for two different ones,
-// the erased handle, or in VARIANT mode a choice of their alternatives while
-// there are at most TH_MAX_CHOICE of them.
+// the erased handle, or in VARIANT mode a choice of all their alternatives.
 template <class... Hs>
 struct type_list {};
 
@@ -369,9 +408,8 @@ template <class List, class H>
 struct add_unique;
 template <class... Hs, class H>
 struct add_unique<type_list<Hs...>, H> {
-    using type = std::conditional_t<(std::same_as<H, Hs> || ...),
-                                    type_list<Hs...>,
-                                    type_list<Hs..., H>>;
+    using type =
+        std::conditional_t<in_pack<H, Hs...>, type_list<Hs...>, type_list<Hs..., H>>;
 };
 
 template <class List, class Alts>
@@ -392,8 +430,7 @@ struct choice_of<type_list<H>> {
 };
 template <class... Hs>
 struct choice_of<type_list<Hs...>> {
-    using type = std::
-        conditional_t<(sizeof...(Hs) <= TH_MAX_CHOICE), choice<Hs...>, erased_handle>;
+    using type = choice<Hs...>;
 };
 
 template <class A, class B>

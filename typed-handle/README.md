@@ -1,4 +1,4 @@
-# Typed operation handles (2026-11-22, generalized 2026-11-23)
+# Typed operation handles (2026-11-22; generalized 2026-11-23; asynchronous completion and adaptors 2026-11-27)
 
 D4481's `operation_handle` is one erased type: whatever `start` or a
 completion hands back to be run next. This experiment adds a typed handle
@@ -101,14 +101,18 @@ with `$STDEXEC` stdexec's `include` directory at 30acdb0:
 ```sh
 for m in 0 1 2 3; do
   g++ -std=c++23 -isystem "$STDEXEC" -fsanitize=address,undefined \
-    -DTH_MODE=$m checks.cpp -o c$m && ./c$m
+    -DTH_MODE=$m checks.cpp remote.cpp -o c$m && ./c$m
 done
 ./cg.sh g++ 1000; ./cg.sh clang++ 1000   # STDEXEC defaults to a preset's copy
 ```
 
 Measured with GCC 13.3 and Clang 18.1 at `-O2`, statically linked, x86-64.
 The checks also ran under ASan and UBSan with GCC, at `-O2` with both
-compilers, and in the `gcc-debug` and `llvm-release` presets.
+compilers, and in the `gcc-debug` and `llvm-release` presets. Since
+asynchronous completion was added they also run under ThreadSanitizer
+(`-fsanitize=thread`, GCC, every mode), and all 69 `typed_handle` tests
+pass in the `gcc-debug` preset; the `llvm-debug` preset wasn't run, since
+the sandbox's Clang has no sanitizer runtimes.
 
 ## Observed
 

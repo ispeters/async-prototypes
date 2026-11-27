@@ -238,7 +238,20 @@ inline constexpr bool nothrow_payload = [] {
     }
 }();
 
-// Construct Sig's payload at p from one expression per argument.
+// Destroy the first `built` elements of an aggregate of several values, last
+// first: what was constructed before an element's construction threw.
+template <class V, std::size_t... I>
+TH_INLINE void
+destroy_first(V& v, std::size_t built, std::index_sequence<I...>) noexcept {
+    constexpr std::size_t n = sizeof...(I);
+    ((n - 1 - I < built ? std::destroy_at(std::addressof(v.template get<n - 1 - I>()))
+                        : void()),
+     ...);
+}
+
+// Construct Sig's payload at p from one expression per argument. If an
+// element's construction throws, the elements already constructed are
+// destroyed before the exception propagates, and nothing is left at p.
 template <class Sig, class... Xs>
 TH_INLINE void construct_payload(void* p, Xs&&... xs) {
     constexpr std::size_t n = sig_traits<Sig>::size;
@@ -246,13 +259,20 @@ TH_INLINE void construct_payload(void* p, Xs&&... xs) {
     if constexpr (n == 1) {
         (store_at<arg_t<Sig, 0>>(p, std::forward<Xs>(xs)), ...);
     } else if constexpr (n > 1) {
-        auto* v    = ::new (p) payload_t<Sig>;
-        auto  refs = std::forward_as_tuple(std::forward<Xs>(xs)...);
-        [&]<std::size_t... I>(std::index_sequence<I...>) {
-            (store_at<arg_t<Sig, I>>(v->template address<I>(),
-                                     std::get<I>(std::move(refs))),
-             ...);
-        }(std::make_index_sequence<n>{});
+        auto*       v     = ::new (p) payload_t<Sig>;
+        auto        refs  = std::forward_as_tuple(std::forward<Xs>(xs)...);
+        std::size_t built = 0;
+        try {
+            [&]<std::size_t... I>(std::index_sequence<I...>) {
+                ((store_at<arg_t<Sig, I>>(v->template address<I>(),
+                                          std::get<I>(std::move(refs))),
+                  ++built),
+                 ...);
+            }(std::make_index_sequence<n>{});
+        } catch (...) {
+            destroy_first(*v, built, std::make_index_sequence<n>{});
+            throw;
+        }
     }
 }
 

@@ -50,6 +50,39 @@ struct pick_sender {
     }
 };
 
+// Counts the instances alive, to show what a throw leaves behind.
+struct counted {
+    inline static int live = 0;
+    counted() noexcept { ++live; }
+    counted(counted&&) noexcept { ++live; }
+    ~counted() { --live; }
+};
+// Moving it throws.
+struct flaky {
+    flaky() = default;
+    flaky(flaky&&) { throw std::runtime_error("flaky"); }
+};
+// A leaf completing with three values whose middle one throws as it is
+// moved into place.
+struct throw_mid_sender {
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        return completion_signatures<set_value_t(counted, flaky, counted),
+                                     set_error_t(std::exception_ptr)>();
+    }
+    template <class R>
+    struct op {
+        R              rcvr;
+        TH_INLINE auto start() & noexcept {
+            return th::set_value(rcvr, counted(), flaky(), counted());
+        }
+    };
+    template <class R>
+    op<R> connect(R rcvr) && noexcept {
+        return {std::move(rcvr)};
+    }
+};
+
 template <class... Fs>
 struct overloaded : Fs... {
     using Fs::operator()...;
@@ -180,6 +213,13 @@ int main() {
             CHECK(st.template get<two>().template get<0>() == 3);
             CHECK(st.template get<two>().template get<1>() == "x");
         });
+    }
+    { // several values whose construction throws part-way: the elements
+      // already constructed are destroyed, and the error is delivered
+        run_root(throw_mid_sender{}, [](auto& st) {
+            CHECK(st.template has<set_error_t(std::exception_ptr)>());
+        });
+        CHECK(counted::live == 0);
     }
     { // a reference completion: the next then sees the same object
         int  x   = 41;

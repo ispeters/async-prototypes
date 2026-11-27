@@ -422,9 +422,6 @@ value type, `then`'s function returned a value, errors were
   `starts_on`, `bulk`, `split`, `into_variant` or the rest.
 - Only `just_unless_stopped` has completion signatures that depend on the
   environment, and only through its stop token.
-- Throwing copies are handled where the standard requires an
-  `exception_ptr`, but a payload of several values that throws part-way
-  through construction leaks the elements already built.
 - Only the stop token is forwarded across the erased boundary; no other
   query, and no scheduler affinity.
 - Nothing requests stop from another thread.

@@ -21,6 +21,7 @@
 #include "payload.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <exception>
 #include <functional>
 #include <new>
@@ -1087,15 +1088,15 @@ struct erased_receiver {
     }
 };
 
-template <class Child, class R>
-struct boundary_op : record {
-    using sigs                     = completions_of_t<Child, erased_env>;
-    using list                     = as_list_t<sigs>;
+// The caller's side of a boundary: the record, its table, and the receiver.
+// Whatever is on the other side sees only the record.
+template <class Sigs, class R>
+struct boundary_base : record {
+    using list                     = as_list_t<Sigs>;
     static constexpr std::size_t n = size_of<list>;
-    using child_op_t               = connect_result_t<Child, erased_receiver<sigs>>;
 
-    static boundary_op* self_of(void* k) noexcept {
-        return static_cast<boundary_op*>(static_cast<record*>(k));
+    static boundary_base* self_of(void* k) noexcept {
+        return static_cast<boundary_base*>(static_cast<record*>(k));
     }
     template <class Sig>
     static erased_handle resume(void* k) noexcept {
@@ -1124,15 +1125,27 @@ struct boundary_op : record {
         });
         return t;
     }
-    R          rcvr;
+
+    R rcvr;
+
+    explicit boundary_base(R r) : record{&table_of<boundary_base>}, rcvr(std::move(r)) {}
+    boundary_base(boundary_base&&) = delete;
+};
+
+// A boundary whose callee is in the same translation unit, behind an
+// optimization barrier.
+template <class Child, class R>
+struct boundary_op : boundary_base<completions_of_t<Child, erased_env>, R> {
+    using sigs       = completions_of_t<Child, erased_env>;
+    using child_op_t = connect_result_t<Child, erased_receiver<sigs>>;
+
     child_op_t child;
 
     boundary_op(Child&& c, R r)
-        : record{&table_of<boundary_op>},
-          rcvr(std::move(r)),
-          child(th::connect(std::move(c), erased_receiver<sigs>{opaque<record*>(this)})) {
-    }
-    boundary_op(boundary_op&&) = delete;
+        : boundary_base<sigs, R>(std::move(r)),
+          child(th::connect(
+              std::move(c),
+              erased_receiver<sigs>{opaque<record*>(static_cast<record*>(this))})) {}
 
     // The callee's start, as if called through an entry in another TU.
     [[gnu::noinline]] static erased_handle start_child(child_op_t* c) noexcept {
@@ -1140,6 +1153,50 @@ struct boundary_op : record {
     }
     TH_INLINE erased_handle start() & noexcept { return start_child(opaque(&child)); }
 };
+
+// A boundary whose callee is compiled separately. Callee declares its
+// completion signatures, the size and alignment of its operation, and
+// three entry points, defined in another translation unit:
+//
+//   static void          connect(void* frame, record* k, Args...) noexcept;
+//   static erased_handle start(void* frame) noexcept;
+//   static void          destroy(void* frame) noexcept;
+//
+// The caller provides the frame; the callee constructs its operation there,
+// connected to an erased_receiver over the caller's record.
+template <class Callee, class R>
+struct remote_op : boundary_base<typename Callee::sigs, R> {
+    alignas(Callee::align) std::byte frame[Callee::size];
+
+    template <class... Args>
+    remote_op(R r, Args... args) : boundary_base<typename Callee::sigs, R>(std::move(r)) {
+        Callee::connect(frame, this, args...);
+    }
+    ~remote_op() { Callee::destroy(frame); }
+
+    TH_INLINE erased_handle start() & noexcept { return Callee::start(frame); }
+};
+
+template <class Callee, class... Args>
+struct remote_sender {
+    std::tuple<Args...> args;
+
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        return typename Callee::sigs();
+    }
+
+    template <class R>
+    remote_op<Callee, R> connect(R rcvr) && {
+        return std::apply(
+            [&](Args... as) { return remote_op<Callee, R>(std::move(rcvr), as...); },
+            args);
+    }
+};
+template <class Callee, class... Args>
+remote_sender<Callee, Args...> remote(Args... args) {
+    return {{args...}};
+}
 
 template <class Child>
 struct boundary_sender {

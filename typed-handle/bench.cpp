@@ -7,6 +7,7 @@
 // the difference per run. The `_checked` scenarios differ from their namesakes only in a
 // leaf that asks a stop token, which the root provides.
 #include "algos.hpp"
+#include "remote.hpp"
 #include "sched.hpp"
 
 #include <cstdio>
@@ -54,8 +55,23 @@ volatile int sink;
              [](auto& st) { sink = st.template get<set_value_t(int)>(); });
 }
 
+// boundary, with the inner then in another translation unit (remote.cpp).
+[[gnu::noinline]] void remote_(int x) {
+    auto inc = [](int v) noexcept { return v + 1; };
+    run_root(then(remote<remote_inc>(x), inc),
+             [](auto& st) { sink = st.template get<set_value_t(int)>(); });
+}
+
 // The same, with a leaf that asks the stop token. `live` is never stopped.
 inplace_stop_source live;
+
+[[gnu::noinline]] void remote_checked(int x) {
+    auto inc = [](int v) noexcept { return v + 1; };
+    run_root(
+        then(remote<remote_inc_checked>(x), inc),
+        [](auto& st) { sink = st.template get<set_value_t(int)>(); },
+        live.get_token());
+}
 
 [[gnu::noinline]] void chain4_checked(int x) {
     auto inc = [](int v) noexcept { return v + 1; };
@@ -188,6 +204,8 @@ int main(int argc, char** argv) {
                      : !std::strcmp(s, "both_live")          ? both_live
                      : !std::strcmp(s, "both_checked")       ? both_checked
                      : !std::strcmp(s, "boundary_checked")   ? boundary_checked
+                     : !std::strcmp(s, "remote")             ? remote_
+                     : !std::strcmp(s, "remote_checked")     ? remote_checked
                                                              : nullptr;
     if (!f) {
         std::fprintf(stderr, "unknown scenario %s\n", s);

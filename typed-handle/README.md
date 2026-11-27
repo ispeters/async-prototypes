@@ -53,6 +53,7 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 | `sched.hpp` | Asynchronous completion: a queue of erased handles, `run_loop`, `thread_pool`, their scheduler, `schedule`, `continues_on`, `starts_on`, `on`, `sync_wait` |
 | `algos.hpp` | `just`, `just_error`, `just_stopped`, `just_unless_stopped`; `then`, `upon_error`, `upon_stopped`; `let_value`, `let_error`, `let_stopped`; `when_all` of any number of children; `repeat_until` (stdexec's, not the standard's); `bulk`; `into_variant`; an erased boundary; a root. Written once for every mode |
 | `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`), a payload that throws part-way, completion on other threads (`sync_wait`, a pool, stop requested from another thread), and the adaptors in `sched.hpp`, `bulk` and `into_variant` |
+| `remote.hpp`, `remote.cpp` | Callees compiled in their own translation unit, behind an erased boundary: each declares its completion signatures, its operation's size and alignment, and `connect`, `start` and `destroy` entry points |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
 
 ## Four modes
@@ -177,7 +178,8 @@ the cell gives a range, GCC's count first.
    EAGER:** the two indirect calls are the boundary's own (the record's
    destination function, and its resume function for the completion that
    happened; the callee's start is a direct call to a `noinline` entry).
-   ERASED adds three.
+   ERASED adds three. With the callee compiled separately the count is
+   the same (28).
 7. **`when_all`'s fan-in is a merge.** Its `arrive` has several outcomes
    (nothing yet, values, stopped, an error), so in TYPED mode it returns an
    erased handle: one indirect call per `when_all`, with both compilers. In
@@ -451,6 +453,29 @@ handle with `run()`, so a typed chain still runs inline from there.
     with the environment's scheduler checks that `starts_on` gives its child
     the scheduler it started on.
 
+### A separately compiled callee
+
+28. **A callee in another translation unit costs a few instructions more
+    than one behind an optimization barrier, and no more indirect calls.**
+    `remote` is `boundary` with the inner `then` in `remote.cpp`, reached
+    through entry points that construct its operation in a frame the caller
+    provides, start it, and destroy it; the record and its table are the
+    same. Built without LTO:
+
+    | | EAGER | ERASED | TYPED | VARIANT | Indirect |
+    |---|---|---|---|---|---|
+    | `remote` | 83 / 67 | 98 / 80 | 83 / 67 | 83 / 67 | 2 / 4 / 2 / 2 |
+    | against `boundary` | +13 / +9 | +13 / +9 | +13 / +9 | +13 / +9 | the same |
+    | `remote_checked` | 111 / 93 | 128 / 105 | 121 / 99 | 115 / 93 | 3 / 5 / 4 / 3 |
+    | against `boundary_checked` | +12 / +9 | +12 / +9 | +12 / +9 | +12 / +9 | the same |
+
+    The difference is the same in every mode, so the barrier modelled the
+    boundary's control flow faithfully. (Reading, not isolated: the extra
+    instructions are the calls to `connect` and `destroy`, which the
+    same-TU boundary inlines.) The caller declares the operation's size,
+    which `remote.cpp` checks; how a caller learns it is the question
+    P4223's `function` answers with its frame allocator.
+
 ## Reading
 
 - The typed handle earns its keep where a delivery has exactly one possible
@@ -499,6 +524,3 @@ handle with `run()`, so a typed chain still runs inline from there.
   query, and no scheduler affinity.
 - No comparison with the `{record, how}` erased layout, which `kv-dest`
   measured, nor with Robert's branch itself (it isn't built here).
-- The erased boundary is in the same translation unit as its callee, behind
-  an optimization barrier and a `noinline` entry; a real separately compiled
-  callee wasn't built.

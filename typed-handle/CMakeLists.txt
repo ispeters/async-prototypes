@@ -7,7 +7,7 @@ async_prototypes_stdexec(30acdb0)
 # One program per mode: EAGER (0), ERASED (1), TYPED (2), VARIANT (3).
 foreach(mode 0 1 2 3)
     add_executable(async_prototypes.typed_handle.checks.${mode})
-    target_sources(async_prototypes.typed_handle.checks.${mode} PRIVATE checks.cpp)
+    target_sources(async_prototypes.typed_handle.checks.${mode} PRIVATE checks.cpp remote.cpp)
     target_compile_definitions(
         async_prototypes.typed_handle.checks.${mode}
         PRIVATE TH_MODE=${mode}
@@ -22,7 +22,7 @@ foreach(mode 0 1 2 3)
     )
 
     add_executable(async_prototypes.typed_handle.bench.${mode})
-    target_sources(async_prototypes.typed_handle.bench.${mode} PRIVATE bench.cpp)
+    target_sources(async_prototypes.typed_handle.bench.${mode} PRIVATE bench.cpp remote.cpp)
     target_compile_definitions(
         async_prototypes.typed_handle.bench.${mode}
         PRIVATE TH_MODE=${mode}
@@ -37,7 +37,7 @@ foreach(mode 0 1 2 3)
         chain4 chain4_throwing let both boundary repeat
         chain4_unstoppable chain4_checked both_live both_checked
         boundary_checked
-        repeat_checked scheduled hopped
+        repeat_checked scheduled hopped remote remote_checked
     )
         add_test(
             NAME typed_handle.bench.${mode}.${scenario}
@@ -50,7 +50,7 @@ endforeach()
 # restart nests a call that ends in again(). The other modes can.
 foreach(mode 1 2 3)
     add_executable(async_prototypes.typed_handle.deduced.${mode})
-    target_sources(async_prototypes.typed_handle.deduced.${mode} PRIVATE checks.cpp)
+    target_sources(async_prototypes.typed_handle.deduced.${mode} PRIVATE checks.cpp remote.cpp)
     target_compile_definitions(
         async_prototypes.typed_handle.deduced.${mode}
         PRIVATE TH_MODE=${mode} TH_DEDUCE_AGAIN

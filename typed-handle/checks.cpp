@@ -3,6 +3,7 @@
 // stopping, a loop's stack depth, an erased boundary, completion signatures,
 // and (TYPED and VARIANT modes) which handle types come back.
 #include "algos.hpp"
+#include "remote.hpp"
 #include "sched.hpp"
 
 #include <cstdio>
@@ -640,6 +641,21 @@ int main() {
                       completion_signatures<set_value_t(), set_stopped_t()>>);
     }
 
+    { // an erased boundary to a callee compiled separately (remote.cpp)
+        run_root(then(remote<remote_inc>(1), inc),
+                 [](auto& st) { CHECK(st.template get<int_sig>() == 3); });
+        inplace_stop_source stopped;
+        stopped.request_stop();
+        run_root(
+            then(remote<remote_inc_checked>(1), inc),
+            [](auto& st) { CHECK(st.stopped()); },
+            stopped.get_token());
+        inplace_stop_source live;
+        run_root(
+            then(remote<remote_inc_checked>(1), inc),
+            [](auto& st) { CHECK(st.template get<int_sig>() == 3); },
+            live.get_token());
+    }
     { // continues_on: completing from another context
         thread_pool pool(2);
         auto        sch  = pool.get_scheduler();

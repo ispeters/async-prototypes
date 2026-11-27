@@ -26,8 +26,8 @@ printf '%-8s %-16s %10s %6s\n' mode scenario Ir/run Bi/run
 for mode in 0 1 2 3; do
   name=$(echo EAGER ERASED TYPED VARIANT | cut -d' ' -f$((mode + 1)))
   "$CXX" -std=c++23 -O2 -DNDEBUG -static -DTH_MODE=$mode -isystem "$STDEXEC" \
-    "$DIR/bench.cpp" -o "$OUT/bench$mode"
-  for s in ${SCENARIOS:-chain4 chain4_throwing let both boundary repeat chain4_unstoppable chain4_checked both_live both_checked boundary_checked repeat_checked scheduled hopped}; do
+    "$DIR/bench.cpp" "$DIR/remote.cpp" -o "$OUT/bench$mode"
+  for s in ${SCENARIOS:-chain4 chain4_throwing let both boundary repeat chain4_unstoppable chain4_checked both_live both_checked boundary_checked repeat_checked scheduled hopped remote remote_checked}; do
     for k in 1 3; do
       valgrind --tool=callgrind --branch-sim=yes \
         --callgrind-out-file="$OUT/cg.$k" "$OUT/bench$mode" "$s" $((k * N)) \

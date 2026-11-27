@@ -191,6 +191,7 @@ machine stack from inside the loop's body:
 | Build | EAGER | ERASED | TYPED | VARIANT |
 |---|---|---|---|---|
 | `-O0`, ASan and UBSan (GCC) | 10,656 B; 1,182,816 B | 0 B; 0 B | 976 B; 976 B | 0 B; 0 B |
+| `-O0` (Clang) | 7,488 B; 831,168 B | 0 B; 0 B | 816 B; 816 B | 0 B; 0 B |
 | `-O2`, at 1000 (GCC / Clang) | 32 B / 47,952 B | 0 B / 0 B | 32 B / 32 B | 0 B / 0 B |
 
 8. **Deferring bounds the stack; nesting bounds it only when the optimizer
@@ -198,8 +199,12 @@ machine stack from inside the loop's body:
    restart a sibling call, so its stack stayed flat; Clang didn't, and its
    stack grew by about 48 bytes per iteration (the earlier version's Clang
    build did make it a sibling call). At `-O0` it grew by about 1.2 KB per
-   iteration. The deferred modes' extent doesn't depend on the number of
-   iterations in any build. (Reading: TYPED's constant extent is the
+   iteration with GCC and 830 bytes with Clang. The deferred modes' extent
+   doesn't depend on the number of iterations in any build, and can't: every
+   hop returns a handle to the driver before the next one runs, so the depth
+   is bounded by one hop's chain, which following stops at the first type
+   already seen. Optimization and sanitizers change the size of that bound,
+   not whether there is one. (Reading: TYPED's constant extent is the
    difference between the first iteration, which runs inside the driver's
    compile-time chain from `start`, and the rest, which run from its loop.
    Not checked. In VARIANT mode every iteration runs from the static loop.)
@@ -429,4 +434,3 @@ value type, `then`'s function returned a value, errors were
 - The erased boundary is in the same translation unit as its callee, behind
   an optimization barrier and a `noinline` entry; a real separately compiled
   callee wasn't built.
-- Sanitizer builds and Clang's `-O0` weren't measured for stack extent.

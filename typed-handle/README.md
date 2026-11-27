@@ -49,7 +49,7 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 |---|---|
 | `handle.hpp` | The handles, following a chain at compile time (`settle`), running a loop of known types as a loop, the driver (`run`), common types, `either`, and the four modes |
 | `payload.hpp` | What a completion carries and where it is constructed; signature lists; originating a completion (`set_value`, `set_error`, `set_stopped`) |
-| `env.hpp` | Environments, `never_stop_token`, and a simplified `inplace_stop_source` with callbacks |
+| `env.hpp` | Environments, and stdexec's stop tokens, sources and callbacks |
 | `algos.hpp` | `just`, `just_error`, `just_stopped`, `just_unless_stopped`; `then`, `upon_error`, `upon_stopped`; `let_value`, `let_error`, `let_stopped`; `when_all` of any number of children; `repeat_until` (stdexec's, not the standard's); an erased boundary; a root. Written once for every mode |
 | `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, and many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`) |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
@@ -131,7 +131,7 @@ scenario completes inline.
 | `chain4`: four `then`s that can't throw | 9 / 8 | 86 / 73 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
 | `chain4_throwing`: four `then`s that may throw | 51 / 35 | 154 / 108 | 135 / 100 | 67 / 29 | 0 / 4 / 3–4 / 0 |
 | `let`: `let_value` starting a `just` | 17 / 8 | 75 / 61 | 17 / 8 | 17 / 8 | 0 / 3 / 0 / 0 |
-| `both`: `when_all` of two `then`s | 60 / 54 | 110 / 96 | 70 / 70 | 77 / 54 | 0 / 3 / 1 / 0 |
+| `both`: `when_all` of two `then`s | 72 / 59 | 122 / 104 | 82 / 75 | 89 / 59 | 0 / 3 / 1 / 0 |
 | `boundary`: `then` around an erased boundary around `then` | 70 / 58 | 85 / 71 | 70 / 58 | 70 / 58 | 2 / 4 / 2 / 2 |
 | `repeat`: per iteration | 11 / 34 | 45 / 43 | 29 / 31 | 26 / 24 | 0 / 3 / 1 / 0 |
 
@@ -281,9 +281,9 @@ root, with leaves that don't ask. Same measurements as above.
 |---|---|---|---|---|---|
 | `chain4_unstoppable`: `chain4`'s leaf asks, but there is no token | 9 / 8 | 86 / 73 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
 | `chain4_checked` | 42 / 43 | 92 / 82 | 55 / 55 | 47 / 43 | 0 / 5 / 1 / 0 |
-| `both_live` | 144 / 116 | 190 / 155 | 154 / 132 | 146 / 116 | 0 / 3 / 1 / 0 |
-| `both_checked` | 154 / 127 | 199 / 169 | 188 / 157 | 161 / 127 | 0 / 3–5 / 1–3 / 0 |
-| `boundary_checked` | 88 / 80 | 105 / 89 | 98 / 83 | 99 / 80 | 3 / 5 / 4 / 3 |
+| `both_live` | 155 / 163 | 207 / 206 | 165 / 179 | 157 / 163 | 0 / 3 / 1 / 0 |
+| `both_checked` | 164 / 174 | 216 / 219 | 209 / 208 | 174 / 174 | 0 / 3–5 / 1–3 / 0 |
+| `boundary_checked` | 99 / 84 | 116 / 96 | 109 / 90 | 103 / 84 | 3 / 5 / 4 / 3 |
 | `repeat_checked`: per iteration | 31.5 / 40 | 54 / 52 | 47 / 46 | 38 / 33 | 0 / 3 / 2 / 0 |
 
 12. **Forwarding environments costs nothing where nothing asks.** A leaf
@@ -299,12 +299,13 @@ root, with leaves that don't ask. Same measurements as above.
     indirect call. In VARIANT mode it's a `choice`: +38 / +35, no indirect
     call. So stop tokens make points 3 and 4 above matter more, not less.
 14. **Forwarding a parent's stop into `when_all` costs more than the rest of
-    `when_all`:** 59 to 84 instructions (`both_live` against `both`), in
-    every mode, for registering and deregistering one callback, which here is
-    two round trips through a spin lock. The leaves' own checks then add
-    only 9 to 34 more (`both_checked`).
+    `when_all`:** 68 to 104 instructions (`both_live` against `both`), in
+    every mode, for registering and deregistering one callback with
+    stdexec's `inplace_stop_source`. The leaves' own checks then add only 9
+    to 44 more (`both_checked`). (With the simplified stop source this
+    experiment first used, forwarding cost 59 to 84.)
 15. **Across the erased boundary the stop token costs one indirect call,**
-    the query function in the record's table, and 18 or 22 instructions in
+    the query function in the record's table, and 29 / 26 instructions in
     EAGER mode (`boundary_checked` against `boundary`).
 16. **A loop that asks every iteration** costs 12 / 9 more per iteration in
     VARIANT mode, where the static loop still runs with no indirect call,
@@ -426,9 +427,7 @@ value type, `then`'s function returned a value, errors were
   through construction leaks the elements already built.
 - Only the stop token is forwarded across the erased boundary; no other
   query, and no scheduler affinity.
-- Nothing requests stop from another thread, and `inplace_stop_source` is
-  simplified (callbacks run under its spin lock), so registration costs are
-  indicative, not stdexec's.
+- Nothing requests stop from another thread.
 - No comparison with the `{record, how}` erased layout, which `kv-dest`
   measured, nor with Robert's branch itself (it isn't built here).
 - The erased boundary is in the same translation unit as its callee, behind

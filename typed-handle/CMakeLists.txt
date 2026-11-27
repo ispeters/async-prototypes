@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
-# stdexec provides the completion_signatures machinery, nothing else.
+# stdexec provides the completion_signatures machinery and stop tokens, nothing
+# else. Its target also links the thread library, which sched.hpp needs.
 async_prototypes_stdexec(30acdb0)
 
 # One program per mode: EAGER (0), ERASED (1), TYPED (2), VARIANT (3).
@@ -36,7 +37,7 @@ foreach(mode 0 1 2 3)
         chain4 chain4_throwing let both boundary repeat
         chain4_unstoppable chain4_checked both_live both_checked
         boundary_checked
-        repeat_checked
+        repeat_checked scheduled
     )
         add_test(
             NAME typed_handle.bench.${mode}.${scenario}

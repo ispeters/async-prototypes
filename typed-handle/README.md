@@ -50,8 +50,9 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 | `handle.hpp` | The handles, following a chain at compile time (`settle`), running a loop of known types as a loop, the driver (`run`), common types, `either`, and the four modes |
 | `payload.hpp` | What a completion carries and where it is constructed; signature lists; originating a completion (`set_value`, `set_error`, `set_stopped`) |
 | `env.hpp` | Environments, and stdexec's stop tokens, sources and callbacks |
+| `sched.hpp` | Asynchronous completion: a queue of erased handles, `run_loop`, `thread_pool`, their scheduler, `schedule`, `sync_wait` |
 | `algos.hpp` | `just`, `just_error`, `just_stopped`, `just_unless_stopped`; `then`, `upon_error`, `upon_stopped`; `let_value`, `let_error`, `let_stopped`; `when_all` of any number of children; `repeat_until` (stdexec's, not the standard's); an erased boundary; a root. Written once for every mode |
-| `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, and many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`) |
+| `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`), a payload that throws part-way, and completion on other threads (`sync_wait`, a pool, stop requested from another thread) |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
 
 ## Four modes
@@ -228,7 +229,11 @@ machine stack from inside the loop's body:
     restart is a handle type named without deducing what running it returns.
     A compile-fail test (`typed_handle.deduced.0`) checks the first, and
     three programs that must compile (`deduced.1` to `deduced.3`) the
-    second.
+    second. The same holds one level up: in EAGER mode a `then` around a
+    `repeat_until` whose child is scheduled can't be compiled, because the
+    loop's completion type needs the `then`'s while the `then` is still
+    incomplete. GCC diagnoses it; Clang 18 crashes. The other modes compile
+    it.
 11. **A `choice` needs no limit on its alternatives; what it costs is
     compile time.** The first version capped a `choice` at four alternatives
     (`TH_MAX_CHOICE`) and erased beyond that; nothing recorded why four. No
@@ -381,6 +386,42 @@ value type, `then`'s function returned a value, errors were
       destructor (which second operation, which kept arguments) and the
       root's.
 
+### Asynchronous completion
+
+`sched.hpp` adds a queue of erased handles, drained by a `run_loop` on the
+thread that calls `run()` or by a `thread_pool`'s threads; `schedule()`,
+whose operation pushes itself and returns `no_operation`; and `sync_wait()`.
+Whoever drains a queue runs each handle with `run()`, so a typed chain still
+runs inline from there.
+
+22. **A trip through a queue costs the same in every mode, and most of
+    what an iteration costs.** `scheduled` is a `repeat_until` each of whose
+    iterations is scheduled on a `run_loop`, drained on the same thread:
+
+    | | EAGER | ERASED | TYPED | VARIANT |
+    |---|---|---|---|---|
+    | `scheduled`: per iteration | 234 / 255 | 267 / 282 | 251 / 270 | 243 / 255 |
+    | Indirect | 1 | 4 | 2 | 1 |
+
+    The queue, its mutex and condition variable, accounts for 217 to 239
+    instructions of each iteration (the difference from `repeat`); the modes
+    differ by at most 33 on top, as they do without the queue. The one indirect call
+    in EAGER and VARIANT is the queue's handle.
+23. **Nothing nests across a queue, in any mode.** `start` returns once the
+    operation is queued, so a loop that restarts through a scheduler doesn't
+    grow the stack even in EAGER mode; only what runs inline between queues
+    can nest.
+24. **Completing on another thread needs nothing new from the protocol.**
+    `sync_wait` over a pool's scheduler; `when_all` of four children
+    completing concurrently on a pool's threads, 200 times; a stop requested
+    from another thread, completing the waiting operation there; and a child
+    failing on a pool's thread, stopping its sibling from that thread: all
+    pass in every mode, under ThreadSanitizer (GCC, three runs each) as well
+    as ASan and UBSan. ThreadSanitizer found one race, in the queue rather
+    than the protocol: `finish()` notified after unlocking, so `sync_wait`
+    could destroy its loop while a pool's thread was still notifying. Both
+    `push()` and `finish()` now notify under the lock.
+
 ## Reading
 
 - The typed handle earns its keep where a delivery has exactly one possible
@@ -415,16 +456,15 @@ value type, `then`'s function returned a value, errors were
 
 ## What it doesn't show
 
-- Nothing completes asynchronously: no `run_loop`, no threads. An
-  asynchronous completion arrives through whatever queues it, which holds
-  erased handles, so typed handles matter only for what runs inline after it.
+- Completion on other threads is checked, not measured: the counts are for
+  a `run_loop` drained on its own thread. Nothing measures contention or
+  wall-clock time, and the queue is a plain mutex and condition variable.
 - Only these algorithms are general: no schedulers, `continues_on`,
   `starts_on`, `bulk`, `split`, `into_variant` or the rest.
-- Only `just_unless_stopped` has completion signatures that depend on the
-  environment, and only through its stop token.
+- Only `just_unless_stopped` and `schedule` have completion signatures that
+  depend on the environment, both through its stop token.
 - Only the stop token is forwarded across the erased boundary; no other
   query, and no scheduler affinity.
-- Nothing requests stop from another thread.
 - No comparison with the `{record, how}` erased layout, which `kv-dest`
   measured, nor with Robert's branch itself (it isn't built here).
 - The erased boundary is in the same translation unit as its callee, behind

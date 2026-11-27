@@ -3,11 +3,13 @@
 // stopping, a loop's stack depth, an erased boundary, completion signatures,
 // and (TYPED and VARIANT modes) which handle types come back.
 #include "algos.hpp"
+#include "sched.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #define CHECK(x)                                                    \
     do {                                                            \
@@ -80,6 +82,50 @@ struct throw_mid_sender {
     template <class R>
     op<R> connect(R rcvr) && noexcept {
         return {std::move(rcvr)};
+    }
+};
+
+// A leaf that declares an int value but delivers an int error.
+struct int_error_sender {
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        return completion_signatures<set_value_t(int), set_error_t(int)>();
+    }
+    template <class R>
+    struct op {
+        R              rcvr;
+        TH_INLINE auto start() & noexcept { return th::set_error(rcvr, 7); }
+    };
+    template <class R>
+    op<R> connect(R rcvr) && noexcept {
+        return {std::move(rcvr)};
+    }
+};
+
+// A leaf that completes only when stop is requested of its receiver's token,
+// on whichever thread requests it.
+struct stop_waiter_sender {
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        return completion_signatures<set_value_t(), set_stopped_t()>();
+    }
+    template <class R>
+    struct op {
+        struct on_stop {
+            op*  self;
+            void operator()() noexcept { th::run(th::set_stopped(self->rcvr)); }
+        };
+        R                                             rcvr;
+        std::optional<inplace_stop_callback<on_stop>> callback;
+
+        TH_INLINE no_operation start() & noexcept {
+            callback.emplace(get_stop_token(th::get_env(rcvr)), on_stop{this});
+            return {};
+        }
+    };
+    template <class R>
+    op<R> connect(R rcvr) && noexcept {
+        return {std::move(rcvr), {}};
     }
 };
 
@@ -500,6 +546,77 @@ int main() {
         // 257: more than a byte can index, and more operands than Clang allows
         // a fold expression.
         check_wide_choice(std::make_index_sequence<257>());
+    }
+
+    { // sync_wait, synchronously and from a thread pool
+        auto one = sync_wait(just(1));
+        CHECK(one && std::get<0>(*one) == 1);
+        thread_pool pool(4);
+        auto        where = sync_wait(then(schedule(pool.get_scheduler()),
+                                    [] noexcept { return std::this_thread::get_id(); }));
+        CHECK(where && std::get<0>(*where) != std::this_thread::get_id());
+        bool caught = false;
+        try {
+            sync_wait(then(schedule(pool.get_scheduler()),
+                           []() -> int { throw std::runtime_error("pool"); }));
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        CHECK(caught);
+        caught = false;
+        try {
+            sync_wait(int_error_sender{});
+        } catch (int e) {
+            caught = e == 7;
+        }
+        CHECK(caught);
+    }
+    { // children completing concurrently on a pool's threads
+        thread_pool pool(4);
+        auto        sch   = pool.get_scheduler();
+        auto        twice = [](int x) noexcept { return 2 * x; };
+        for (int i = 0; i < 200; ++i) {
+            auto r = sync_wait(
+                when_all(then(then(schedule(sch), [] noexcept { return 1; }), twice),
+                         then(then(schedule(sch), [] noexcept { return 2; }), twice),
+                         then(then(schedule(sch), [] noexcept { return 3; }), twice),
+                         then(then(schedule(sch), [] noexcept { return 4; }), twice)));
+            CHECK(r && std::get<0>(*r) == 2 && std::get<1>(*r) == 4 &&
+                  std::get<2>(*r) == 6 && std::get<3>(*r) == 8);
+        }
+    }
+    { // stop requested from another thread
+        using Sigs = completions_of_t<stop_waiter_sender, root_env_t<inplace_stop_token>>;
+        inplace_stop_source                  src;
+        root_state<Sigs, inplace_stop_token> st;
+        st.token = src.get_token();
+        auto op =
+            th::connect(stop_waiter_sender{}, root_rcvr<Sigs, inplace_stop_token>(&st));
+        th::run(th::start(op));
+        CHECK(st.which == -1);
+        std::thread([&] { src.request_stop(); }).join();
+        CHECK(st.stopped());
+    }
+    { // a child failing on a pool's thread stops its sibling from there
+        thread_pool pool(2);
+        bool        caught = false;
+        try {
+            sync_wait(when_all(stop_waiter_sender{},
+                               then(schedule(pool.get_scheduler()), []() -> int {
+                                   throw std::runtime_error("sibling");
+                               })));
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        CHECK(caught);
+    }
+    { // schedule's completions depend on the environment
+        static_assert(same_sigs<completions_of_t<schedule_sender, empty_env>,
+                                completion_signatures<set_value_t()>>);
+        static_assert(
+            same_sigs<completions_of_t<schedule_sender,
+                                       prop<get_stop_token_t, inplace_stop_token>>,
+                      completion_signatures<set_value_t(), set_stopped_t()>>);
     }
 
     std::printf("%s checks pass\n", mode_name());

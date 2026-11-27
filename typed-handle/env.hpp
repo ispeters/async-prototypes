@@ -71,6 +71,16 @@ struct get_stop_token_t {
 };
 inline constexpr get_stop_token_t get_stop_token{};
 
+// The scheduler an environment offers, for those that offer one.
+struct get_scheduler_t {
+    template <class E>
+        requires requires(const E& e, get_scheduler_t q) { e.query(q); }
+    TH_INLINE auto operator()(const E& e) const noexcept {
+        return e.query(*this);
+    }
+};
+inline constexpr get_scheduler_t get_scheduler{};
+
 template <class R>
 using stop_token_of_t = decltype(get_stop_token(get_env(std::declval<const R&>())));
 

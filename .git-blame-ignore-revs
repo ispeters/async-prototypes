@@ -7,3 +7,6 @@
 
 # Clang format (#2)
 7badee59ef974e4b223e014d96b5ef8c9c64491d
+
+# Apply `.clang-format` to the typed-handle experiment
+8b55309c285a1127aaaa09f5486085650697bf6d

@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <execution>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -126,6 +127,26 @@ struct stop_waiter_sender {
     template <class R>
     op<R> connect(R rcvr) && noexcept {
         return {std::move(rcvr), {}};
+    }
+};
+
+// A leaf that completes with its environment's scheduler, whose type its
+// completion signature depends on.
+struct read_scheduler_sender {
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        return completion_signatures<set_value_t(scheduler_of_t<Env>)>();
+    }
+    template <class R>
+    struct op {
+        R              rcvr;
+        TH_INLINE auto start() & noexcept {
+            return th::set_value(rcvr, get_scheduler(th::get_env(rcvr)));
+        }
+    };
+    template <class R>
+    op<R> connect(R rcvr) && noexcept {
+        return {std::move(rcvr)};
     }
 };
 
@@ -617,6 +638,114 @@ int main() {
             same_sigs<completions_of_t<schedule_sender,
                                        prop<get_stop_token_t, inplace_stop_token>>,
                       completion_signatures<set_value_t(), set_stopped_t()>>);
+    }
+
+    { // continues_on: completing from another context
+        thread_pool pool(2);
+        auto        sch  = pool.get_scheduler();
+        auto        here = std::this_thread::get_id();
+        auto        r    = sync_wait(then(continues_on(just(1), sch), [](int x) noexcept {
+            return std::pair(x, std::this_thread::get_id());
+        }));
+        CHECK(r && std::get<0>(*r).first == 1 && std::get<0>(*r).second != here);
+        // A reference completion decays, as C++26's does: the value is copied.
+        int  x   = 4;
+        auto ref = then(just(&x), [](int* p) noexcept -> int& { return *p; });
+        static_assert(same_sigs<sigs_t<decltype(continues_on(ref, sch))>,
+                                completion_signatures<set_value_t(int)>>);
+        auto copied = sync_wait(continues_on(ref, sch));
+        CHECK(copied && std::get<0>(*copied) == 4);
+        // An immovable value crosses the hop where it was constructed.
+        auto v = sync_wait(then(
+            continues_on(then(just(7), [](int y) noexcept { return pinned(y); }), sch),
+            [](pinned&& p) noexcept { return p.v; }));
+        CHECK(v && std::get<0>(*v) == 7);
+    }
+    { // continues_on, stopped at the hop: the payload already in place is destroyed
+        inplace_stop_source stopped;
+        stopped.request_stop();
+        run_loop loop;
+        using S = continues_on_sender<just_sender<set_value_t, counted>, queue_scheduler>;
+        using Sigs = completions_of_t<S, root_env_t<inplace_stop_token>>;
+        root_state<Sigs, inplace_stop_token> st;
+        st.token = stopped.get_token();
+        {
+            auto op = th::connect(continues_on(just(counted()), loop.get_scheduler()),
+                                  root_rcvr<Sigs, inplace_stop_token>(&st));
+            th::run(th::start(op));
+            loop.finish(); // run() drains what was queued, then returns
+            loop.run();
+            CHECK(st.stopped());
+        }
+        CHECK(counted::live == 0);
+    }
+    { // starts_on and on
+        thread_pool pool(2);
+        auto        sch   = pool.get_scheduler();
+        auto        here  = std::this_thread::get_id();
+        auto        where = sync_wait(starts_on(
+            sch, then(just(), [] noexcept { return std::this_thread::get_id(); })));
+        CHECK(where && std::get<0>(*where) != here);
+        // The child's environment names the scheduler it was started on.
+        auto seen = sync_wait(starts_on(sch, read_scheduler_sender{}));
+        CHECK(seen && std::get<0>(*seen) == sch);
+        auto outer = sync_wait(read_scheduler_sender{});
+        CHECK(outer && !(std::get<0>(*outer) == sch));
+        // on runs the child on sch, then comes back to sync_wait's thread.
+        auto both = sync_wait(then(
+            on(sch, then(just(), [] noexcept { return std::this_thread::get_id(); })),
+            [](std::thread::id inner) noexcept {
+                return std::pair(inner, std::this_thread::get_id());
+            }));
+        CHECK(both && std::get<0>(*both).first != here &&
+              std::get<0>(*both).second == here);
+        // on's completions depend on the environment's scheduler.
+        static_assert(
+            same_sigs<completions_of_t<on_sender<queue_scheduler, read_scheduler_sender>,
+                                       sync_wait_env>,
+                      completion_signatures<set_value_t(queue_scheduler)>>);
+    }
+    { // bulk
+        auto squares =
+            sync_wait(bulk(just(std::vector<int>(5)),
+                           std::execution::seq,
+                           5,
+                           [](int i, std::vector<int>& v) noexcept { v[i] = i * i; }));
+        CHECK(squares && std::get<0>(*squares)[4] == 16);
+        // f works on the values where the receiver wants them: an immovable
+        // value is updated in place.
+        auto bumped =
+            sync_wait(then(bulk(then(just(7), [](int y) noexcept { return pinned(y); }),
+                                std::execution::seq,
+                                3,
+                                [](int, pinned& p) noexcept { ++p.v; }),
+                           [](pinned&& p) noexcept { return p.v; }));
+        CHECK(bumped && std::get<0>(*bumped) == 10);
+        bool caught = false;
+        try {
+            sync_wait(bulk(just(counted()), std::execution::seq, 4, [](int i, counted&) {
+                if (i == 2) {
+                    throw std::runtime_error("bulk");
+                }
+            }));
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        CHECK(caught && counted::live == 0);
+    }
+    { // into_variant
+        auto one = sync_wait(into_variant(pick_sender{false}));
+        CHECK(one && std::get<0>(*one).index() == 1 &&
+              std::get<0>(std::get<1>(std::get<0>(*one))) == "one");
+        auto first = sync_wait(into_variant(pick_sender{true}));
+        CHECK(first && std::get<0>(std::get<0>(std::get<0>(*first))) == 1);
+        bool caught = false;
+        try {
+            sync_wait(into_variant(int_error_sender{}));
+        } catch (int e) {
+            caught = e == 7;
+        }
+        CHECK(caught);
     }
 
     std::printf("%s checks pass\n", mode_name());

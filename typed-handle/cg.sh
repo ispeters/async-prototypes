@@ -1,7 +1,8 @@
 #!/bin/sh
 # Instructions (Ir) and indirect branches (Bi) per run of each scenario, in
 # each mode, under Callgrind: the difference between N and 3N runs, over 2N.
-# For `repeat`, `repeat_checked` and `scheduled` the numbers are per iteration.
+# For `repeat`, `repeat_checked`, `scheduled` and `hopped` the numbers are per
+# iteration.
 #
 #   ./cg.sh [CXX [N]]      e.g. ./cg.sh g++ 1000
 #   SCENARIOS="let both" ./cg.sh    only these
@@ -26,7 +27,7 @@ for mode in 0 1 2 3; do
   name=$(echo EAGER ERASED TYPED VARIANT | cut -d' ' -f$((mode + 1)))
   "$CXX" -std=c++23 -O2 -DNDEBUG -static -DTH_MODE=$mode -isystem "$STDEXEC" \
     "$DIR/bench.cpp" -o "$OUT/bench$mode"
-  for s in ${SCENARIOS:-chain4 chain4_throwing let both boundary repeat chain4_unstoppable chain4_checked both_live both_checked boundary_checked repeat_checked scheduled}; do
+  for s in ${SCENARIOS:-chain4 chain4_throwing let both boundary repeat chain4_unstoppable chain4_checked both_live both_checked boundary_checked repeat_checked scheduled hopped}; do
     for k in 1 3; do
       valgrind --tool=callgrind --branch-sim=yes \
         --callgrind-out-file="$OUT/cg.$k" "$OUT/bench$mode" "$s" $((k * N)) \

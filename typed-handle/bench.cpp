@@ -2,10 +2,10 @@
 //
 //   bench SCENARIO N
 //
-// runs SCENARIO N times (for `repeat`, `repeat_checked` and `scheduled`,
-// once, with N iterations). cg.sh runs each twice under Callgrind and reports the
-// difference per run. The `_checked` scenarios differ from their namesakes
-// only in a leaf that asks a stop token, which the root provides.
+// runs SCENARIO N times (for `repeat`, `repeat_checked`, `scheduled` and
+// `hopped`, once, with N iterations). cg.sh runs each twice under Callgrind and reports
+// the difference per run. The `_checked` scenarios differ from their namesakes only in a
+// leaf that asks a stop token, which the root provides.
 #include "algos.hpp"
 #include "sched.hpp"
 
@@ -142,6 +142,27 @@ inplace_stop_source live;
     sink = count;
 }
 
+// The same, through continues_on: each iteration's value is produced inline,
+// then delivered from the run_loop.
+[[gnu::noinline]] void hopped(int n) {
+    int      count = 0;
+    run_loop loop;
+    auto     s = repeat_until(
+        then(continues_on(just(&count), loop.get_scheduler()), [&](int* c) noexcept {
+            bool done = ++*c >= n;
+            if (done) {
+                loop.finish();
+            }
+            return done;
+        }));
+    using Sigs = completions_of_t<decltype(s), empty_env>;
+    root_state<Sigs> st;
+    auto             op = th::connect(std::move(s), root_rcvr<Sigs>(&st));
+    th::run(th::start(op));
+    loop.run();
+    sink = count;
+}
+
 int main(int argc, char** argv) {
     if (argc != 3) {
         std::fprintf(stderr, "usage: %s SCENARIO N\n", argv[0]);
@@ -150,10 +171,11 @@ int main(int argc, char** argv) {
     int         n = std::atoi(argv[2]);
     const char* s = argv[1];
     if (!std::strcmp(s, "repeat") || !std::strcmp(s, "repeat_checked") ||
-        !std::strcmp(s, "scheduled")) {
+        !std::strcmp(s, "scheduled") || !std::strcmp(s, "hopped")) {
         (!std::strcmp(s, "repeat")           ? repeat
          : !std::strcmp(s, "repeat_checked") ? repeat_checked
-                                             : scheduled)(n);
+         : !std::strcmp(s, "scheduled")      ? scheduled
+                                             : hopped)(n);
         return sink == n ? 0 : 1;
     }
     void (*f)(int) = !std::strcmp(s, "chain4")               ? chain4

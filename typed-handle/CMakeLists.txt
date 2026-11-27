@@ -37,7 +37,7 @@ foreach(mode 0 1 2 3)
         chain4 chain4_throwing let both boundary repeat
         chain4_unstoppable chain4_checked both_live both_checked
         boundary_checked
-        repeat_checked scheduled
+        repeat_checked scheduled hopped
     )
         add_test(
             NAME typed_handle.bench.${mode}.${scenario}

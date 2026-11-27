@@ -50,9 +50,9 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 | `handle.hpp` | The handles, following a chain at compile time (`settle`), running a loop of known types as a loop, the driver (`run`), common types, `either`, and the four modes |
 | `payload.hpp` | What a completion carries and where it is constructed; signature lists; originating a completion (`set_value`, `set_error`, `set_stopped`) |
 | `env.hpp` | Environments, and stdexec's stop tokens, sources and callbacks |
-| `sched.hpp` | Asynchronous completion: a queue of erased handles, `run_loop`, `thread_pool`, their scheduler, `schedule`, `sync_wait` |
-| `algos.hpp` | `just`, `just_error`, `just_stopped`, `just_unless_stopped`; `then`, `upon_error`, `upon_stopped`; `let_value`, `let_error`, `let_stopped`; `when_all` of any number of children; `repeat_until` (stdexec's, not the standard's); an erased boundary; a root. Written once for every mode |
-| `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`), a payload that throws part-way, and completion on other threads (`sync_wait`, a pool, stop requested from another thread) |
+| `sched.hpp` | Asynchronous completion: a queue of erased handles, `run_loop`, `thread_pool`, their scheduler, `schedule`, `continues_on`, `starts_on`, `on`, `sync_wait` |
+| `algos.hpp` | `just`, `just_error`, `just_stopped`, `just_unless_stopped`; `then`, `upon_error`, `upon_stopped`; `let_value`, `let_error`, `let_stopped`; `when_all` of any number of children; `repeat_until` (stdexec's, not the standard's); `bulk`; `into_variant`; an erased boundary; a root. Written once for every mode |
+| `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`), a payload that throws part-way, completion on other threads (`sync_wait`, a pool, stop requested from another thread), and the adaptors in `sched.hpp`, `bulk` and `into_variant` |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
 
 ## Four modes
@@ -390,9 +390,9 @@ value type, `then`'s function returned a value, errors were
 
 `sched.hpp` adds a queue of erased handles, drained by a `run_loop` on the
 thread that calls `run()` or by a `thread_pool`'s threads; `schedule()`,
-whose operation pushes itself and returns `no_operation`; and `sync_wait()`.
-Whoever drains a queue runs each handle with `run()`, so a typed chain still
-runs inline from there.
+whose operation pushes itself and returns `no_operation`; `continues_on`,
+`starts_on` and `on`; and `sync_wait()`. Whoever drains a queue runs each
+handle with `run()`, so a typed chain still runs inline from there.
 
 22. **A trip through a queue costs the same in every mode, and most of
     what an iteration costs.** `scheduled` is a `repeat_until` each of whose
@@ -421,6 +421,35 @@ runs inline from there.
     than the protocol: `finish()` notified after unlocking, so `sync_wait`
     could destroy its loop while a pool's thread was still notifying. Both
     `push()` and `finish()` now notify under the lock.
+25. **Result destinations let the adaptors move nothing.** `continues_on`
+    has the child construct its payload at the receiver's destination, then
+    hops and delivers; only a completion that decays (a reference) is staged
+    and copied, as C++26 requires. `bulk` calls `f` on the values where the
+    receiver wants them, then delivers them. So an immovable value crosses
+    `continues_on`, and `bulk` updates one in place: both checked, and
+    neither possible with C++26's adaptors, which store the values in their
+    own state and move them out. `into_variant` must stage, since the child
+    can't construct into a `variant`'s alternative.
+26. **What `continues_on` adds is a few instructions, except in ERASED
+    mode.** `hopped` is `scheduled` with the value produced inline and
+    delivered through `continues_on`:
+
+    | | EAGER | ERASED | TYPED | VARIANT |
+    |---|---|---|---|---|
+    | `hopped`: per iteration | 244 / 261 | 296 / 312 | 264 / 281 | 256 / 261 |
+    | against `scheduled` | +10 / +6 | +29 / +30 | +13 / +11 | +13 / +6 |
+    | Indirect | 1 | 7 | 2 | 1 |
+
+    After the hop, `continues_on` picks the completion that arrived by its
+    index (`by_index` in `handle.hpp`); with one possible completion there is
+    nothing to erase in TYPED mode, and no extra indirect call.
+27. **Completion signatures depend on the environment in three ways here:**
+    `schedule` (and `just_unless_stopped`) declare `set_stopped_t()` only
+    when the stop token can be stopped; `on` completes on the environment's
+    scheduler, so its signatures name that scheduler's type, and it can't be
+    connected where the environment has none; and a test leaf completing
+    with the environment's scheduler checks that `starts_on` gives its child
+    the scheduler it started on.
 
 ## Reading
 
@@ -459,10 +488,13 @@ runs inline from there.
 - Completion on other threads is checked, not measured: the counts are for
   a `run_loop` drained on its own thread. Nothing measures contention or
   wall-clock time, and the queue is a plain mutex and condition variable.
-- Only these algorithms are general: no schedulers, `continues_on`,
-  `starts_on`, `bulk`, `split`, `into_variant` or the rest.
-- Only `just_unless_stopped` and `schedule` have completion signatures that
-  depend on the environment, both through its stop token.
+- Of the standard's algorithms, these are missing: `split`,
+  `bulk_chunked` and `bulk_unchunked`, `when_all_with_variant`,
+  `stopped_as_optional` and `stopped_as_error`, `read_env` and `write_env`,
+  `affine_on`, and `counting_scope` with `spawn` and `spawn_future`. `bulk`
+  ignores its execution policy and calls `f` in order on the completing
+  thread. Schedulers can't customize algorithms (no domains), and there is
+  no `schedule_from`.
 - Only the stop token is forwarded across the erased boundary; no other
   query, and no scheduler affinity.
 - No comparison with the `{record, how}` erased layout, which `kv-dest`

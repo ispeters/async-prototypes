@@ -525,6 +525,28 @@ TH_INLINE auto either(bool first, F f, G g) noexcept
     return g();
 }
 
+// A branch among N handles: f.template operator()<I>() for the I equal to i,
+// which must be less than N.
+template <class H, std::size_t I, std::size_t N, class F>
+TH_INLINE H by_index_(int i, F& f) noexcept {
+    if constexpr (I + 1 == N) {
+        return f.template operator()<I>();
+    } else {
+        if (i == int(I)) {
+            return f.template operator()<I>();
+        }
+        return by_index_<H, I + 1, N>(i, f);
+    }
+}
+template <std::size_t N, class F>
+TH_INLINE auto by_index(int i, F f) noexcept {
+    using H = typename decltype([]<std::size_t... I>(std::index_sequence<I...>) {
+        return std::type_identity<
+            common_handle_t<decltype(std::declval<F&>().template operator()<I>())...>> {};
+    }(std::make_index_sequence<N>{}))::type;
+    return by_index_<H, 0, N>(i, f);
+}
+
 // A receiver r of type R provides
 //
 //   r.complete<Sig>()      a handle for delivering Sig; runs nothing

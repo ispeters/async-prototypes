@@ -26,6 +26,7 @@
 #include <new>
 #include <tuple>
 #include <type_traits>
+#include <variant>
 
 namespace th {
 using std::exception_ptr;
@@ -1249,6 +1250,245 @@ void run_root(S&& s, Use use, Token token = {}) {
     auto op  = th::connect(std::forward<S>(s), root_rcvr<Sigs, Token>{&st});
     th::run(th::start(op));
     use(st);
+}
+
+// ---- bulk -----------------------------------------------------------------
+// For a value completion, calls f(i, args...) for each i in [0, shape), with
+// lvalues of the values, then completes with them. The values are where the
+// receiver wants them from the start: the child constructs them at the
+// receiver's destination, f works on them there, and nothing is moved. The
+// execution policy is accepted and ignored: the calls are made in order, on
+// the completing thread.
+// Whether f(i, args...) can't throw, with lvalues of a value completion's
+// arguments.
+template <class F, class Shape, class Sig>
+inline constexpr bool bulk_nothrow = false;
+template <class F, class Shape, class... As>
+inline constexpr bool bulk_nothrow<F, Shape, set_value_t(As...)> =
+    std::is_nothrow_invocable_v<F&, Shape, std::remove_reference_t<As>&...>;
+
+template <class Child, class Shape, class F, class R>
+struct bulk_op {
+    using child_sigs = completions_of_t<Child, env_of_t<R>>;
+
+    struct rcvr_t : operation_handle<rcvr_t, bulk_op> {
+        using base_t = operation_handle<rcvr_t, bulk_op>;
+        using base_t::base_t;
+
+        template <class Sig>
+        void* destination() noexcept {
+            return destination_of<R, Sig>(this->op()->rcvr);
+        }
+        TH_INLINE env_of_t<R> get_env() const noexcept {
+            return th::get_env(this->op()->rcvr);
+        }
+
+      private:
+        friend base_t;
+
+        template <class Sig>
+        TH_INLINE static auto resume(bulk_op& self) noexcept {
+            if constexpr (same_as<tag_of_t<Sig>, set_value_t>) {
+                return self.template run<Sig>();
+            } else {
+                return later<Sig>(self.rcvr);
+            }
+        }
+    };
+
+    Shape                           shape;
+    F                               f;
+    R                               rcvr;
+    connect_result_t<Child, rcvr_t> child;
+
+    bulk_op(Child&& c, Shape s, F fn, R r)
+        : shape(s),
+          f(std::move(fn)),
+          rcvr(std::move(r)),
+          child(th::connect(std::move(c), rcvr_t(this))) {}
+    bulk_op(bulk_op&&) = delete;
+
+    TH_INLINE auto start() & noexcept { return th::start(child); }
+
+    template <class Sig>
+    TH_INLINE auto run() noexcept {
+        void* p     = destination_of<R, Sig>(rcvr);
+        auto  calls = [&] {
+            apply_payload<Sig>(p, [&](auto&&... as) {
+                for (Shape i = 0; i < shape; ++i) {
+                    f(i, as...);
+                }
+            });
+        };
+        if constexpr (bulk_nothrow<F, Shape, Sig>) {
+            calls();
+            return later<Sig>(rcvr);
+        } else {
+            bool ok = true;
+            try {
+                calls();
+            } catch (...) {
+                destroy_payload<Sig>(p); // before the error takes its place
+                ::new (destination_of<R, set_error_t(exception_ptr)>(rcvr))
+                    exception_ptr(std::current_exception());
+                ok = false;
+            }
+            return either(
+                ok,
+                [&] { return later<Sig>(rcvr); },
+                [&] { return later<set_error_t(exception_ptr)>(rcvr); });
+        }
+    }
+};
+
+template <class Child, class Shape, class F>
+struct bulk_sender {
+    Child child;
+    Shape shape;
+    F     f;
+
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        using sigs             = completions_of_t<Child, Env>;
+        constexpr bool nothrow = []<class... S>(type_list<S...>) {
+            return (bulk_nothrow<F, Shape, S> && ...);
+        }(select_t<set_value_t, sigs>());
+        return concat_t<sigs, eptr_unless<nothrow>>();
+    }
+
+    template <class R>
+    bulk_op<Child, Shape, F, R> connect(R rcvr) && {
+        return {std::move(child), shape, std::move(f), std::move(rcvr)};
+    }
+};
+template <class Child, class Policy, class Shape, class F>
+bulk_sender<Child, Shape, F> bulk(Child c, Policy&&, Shape shape, F f) {
+    return {std::move(c), shape, std::move(f)};
+}
+
+// ---- into_variant ---------------------------------------------------------
+// Turns the child's value completions into one, set_value_t(V), where V is a
+// variant with a tuple of decayed values per value completion. The child's
+// values are staged here, then the variant is constructed in place at the
+// receiver's destination.
+template <class Sig>
+struct values_tuple;
+template <class... As>
+struct values_tuple<set_value_t(As...)> {
+    using type                    = std::tuple<std::decay_t<As>...>;
+    static constexpr bool nothrow = std::is_nothrow_constructible_v<type, As...>;
+};
+
+template <class List>
+struct variant_of;
+template <class... S>
+struct variant_of<type_list<S...>> {
+    using type                    = std::variant<typename values_tuple<S>::type...>;
+    static constexpr bool nothrow = (values_tuple<S>::nothrow && ...);
+};
+
+template <class Child, class R>
+struct into_variant_op {
+    using child_sigs = completions_of_t<Child, env_of_t<R>>;
+    using value_list = select_t<set_value_t, child_sigs>;
+    using variant_t  = typename variant_of<value_list>::type;
+    using out_sig    = set_value_t(variant_t);
+
+    struct rcvr_t : operation_handle<rcvr_t, into_variant_op> {
+        using base_t = operation_handle<rcvr_t, into_variant_op>;
+        using base_t::base_t;
+
+        template <class Sig>
+        void* destination() noexcept {
+            if constexpr (same_as<tag_of_t<Sig>, set_value_t>) {
+                return this->op()->staged.address();
+            } else {
+                return destination_of<R, Sig>(this->op()->rcvr);
+            }
+        }
+        TH_INLINE env_of_t<R> get_env() const noexcept {
+            return th::get_env(this->op()->rcvr);
+        }
+
+      private:
+        friend base_t;
+
+        template <class Sig>
+        TH_INLINE static auto resume(into_variant_op& self) noexcept {
+            if constexpr (same_as<tag_of_t<Sig>, set_value_t>) {
+                return self.template wrap<Sig>();
+            } else {
+                return later<Sig>(self.rcvr);
+            }
+        }
+    };
+
+    R                               rcvr;
+    storage_for_t<value_list>       staged;
+    connect_result_t<Child, rcvr_t> child;
+
+    into_variant_op(Child&& c, R r)
+        : rcvr(std::move(r)), child(th::connect(std::move(c), rcvr_t(this))) {}
+    into_variant_op(into_variant_op&&) = delete;
+
+    TH_INLINE auto start() & noexcept { return th::start(child); }
+
+    template <class Sig>
+    TH_INLINE auto wrap() noexcept {
+        constexpr std::size_t I    = index_in<Sig, value_list>;
+        void*                 p    = staged.address();
+        auto                  make = [&] {
+            apply_payload<Sig>(p, [&](auto&&... as) {
+                ::new (destination_of<R, out_sig>(rcvr))
+                    variant_t(std::in_place_index<I>, static_cast<decltype(as)&&>(as)...);
+            });
+        };
+        if constexpr (values_tuple<Sig>::nothrow) {
+            make();
+            destroy_payload<Sig>(p);
+            return later<out_sig>(rcvr);
+        } else {
+            bool ok = true;
+            try {
+                make();
+            } catch (...) {
+                ::new (destination_of<R, set_error_t(exception_ptr)>(rcvr))
+                    exception_ptr(std::current_exception());
+                ok = false;
+            }
+            destroy_payload<Sig>(p);
+            return either(
+                ok,
+                [&] { return later<out_sig>(rcvr); },
+                [&] { return later<set_error_t(exception_ptr)>(rcvr); });
+        }
+    }
+};
+
+template <class Child>
+struct into_variant_sender {
+    Child child;
+
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        using sigs   = completions_of_t<Child, Env>;
+        using values = select_t<set_value_t, sigs>;
+        static_assert(size_of<values> > 0, "into_variant needs a value completion");
+        using V = variant_of<values>;
+        return concat_t<completion_signatures<set_value_t(typename V::type)>,
+                        to_sigs_t<select_t<set_error_t, sigs>>,
+                        to_sigs_t<select_t<set_stopped_t, sigs>>,
+                        eptr_unless<V::nothrow>>();
+    }
+
+    template <class R>
+    into_variant_op<Child, R> connect(R rcvr) && {
+        return {std::move(child), std::move(rcvr)};
+    }
+};
+template <class Child>
+into_variant_sender<Child> into_variant(Child c) {
+    return {std::move(c)};
 }
 
 } // namespace th

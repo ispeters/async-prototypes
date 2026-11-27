@@ -69,6 +69,9 @@ using eptr_unless = std::conditional_t<Nothrow, completion_signatures<>, eptr_si
 template <class... Lists>
 using concat_t = decltype(exec::concat_completion_signatures(Lists()...));
 
+template <class Sig>
+using decayed_t = typename sig_traits<Sig>::decayed;
+
 // Lists of signatures as type_lists, and what's in them.
 template <class Sigs>
 struct as_list;
@@ -93,6 +96,16 @@ struct select_tag<Tag, type_list<S...>> {
 // The signatures in a completion_signatures list that have this tag.
 template <class Tag, class Sigs>
 using select_t = typename select_tag<Tag, as_list_t<Sigs>>::type;
+
+// A type_list of signatures as a completion_signatures list.
+template <class List>
+struct to_sigs;
+template <class... S>
+struct to_sigs<type_list<S...>> {
+    using type = completion_signatures<S...>;
+};
+template <class List>
+using to_sigs_t = typename to_sigs<List>::type;
 
 template <class Sig, class List>
 inline constexpr std::size_t index_in = 0;

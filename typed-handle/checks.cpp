@@ -88,12 +88,15 @@ inline constexpr bool same_sigs = A() == B();
 
 // A receiver that records which of many receiver types completed.
 template <std::size_t I>
-struct tally_rcvr {
-    using operation_type = std::size_t;
-    std::size_t* ran;
-    TH_INLINE std::size_t* operation_state() const noexcept { return ran; }
+struct tally_rcvr : operation_handle<tally_rcvr<I>, std::size_t> {
+    using base_t = operation_handle<tally_rcvr, std::size_t>;
+    using base_t::base_t;
+
+  private:
+    friend base_t;
+
     template <class Sig>
-    TH_INLINE static no_operation complete(std::size_t& self) noexcept {
+    TH_INLINE static no_operation resume(std::size_t& self) noexcept {
         self = I;
         return {};
     }
@@ -126,8 +129,9 @@ void check_wide_choice(std::index_sequence<I...>) {
 #endif
     // A table, not a fold over I: Clang limits a fold to 256 operands.
     using make_t                   = wide (*)(std::size_t*) noexcept;
-    static constexpr make_t make[] = {
-        [](std::size_t* ran) noexcept -> wide { return tally_handle<I>(ran); }...};
+    static constexpr make_t make[] = {[](std::size_t* ran) noexcept -> wide {
+        return tally_rcvr<I>(ran).template complete<set_value_t()>();
+    }...};
     for (std::size_t i = 0; i < sizeof...(I); ++i) {
         std::size_t ran = sizeof...(I);
         run_wide(make[i](&ran));

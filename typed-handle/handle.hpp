@@ -1,28 +1,33 @@
 // Typed and erased operation handles.
 //
-// Every transfer of control in the protocol delivers a signal to a target:
-// an operation state receives start_t(), and a receiver receives one of its
-// completion signatures. A handle is such a delivery, deferred:
+// Every transfer of control in the protocol starts an operation or completes
+// a receiver. A handle is such a transfer, deferred:
 //
-//   operation_handle<T, Sig>   typed: delivers Sig to a T; the type names
-//                              the code to run, so a chain of typed handles
-//                              can be followed, and inlined, at compile time
-//   operation_handle<>         erased: two words, {function, data}; the
-//                              function delivers one signal to one target
-//   no_operation               typed: there is nothing to run
-//   choice<Hs...>              typed (VARIANT mode only): one of several
-//                              typed handles, with an index saying which
+//   operation_handle<Op>              typed: start Op
+//   operation_handle<R, Tag(Args...)> typed: complete a receiver of type R
+//                                     with Tag(Args...)
+//   operation_handle<>                erased: two words, {function, data}
+//   no_operation                      typed: there is nothing to run
+//   choice<Hs...>                     typed (VARIANT mode only): one of
+//                                     several typed handles, with an index
+//                                     saying which
 //
-// Every typed handle holds one pointer to the operation state whose code it
-// runs, and operation states are immovable. For start_t() that is the
-// operation being started. For a completion it is the receiver's parent, not
-// the receiver: a receiver needn't be copyable, and it lives in the child,
-// which may be gone by the time the handle runs. So a receiver type R names
-// its parent's type as R::operation_type, a receiver hands out a pointer to
-// its parent through operation_state(), and running the handle calls the
-// static R::complete<Sig>(op). Completions carry no values: a value is
-// constructed at the receiver's destination before the completion is
-// delivered.
+// A typed handle's type names the code it runs, so a chain of typed handles
+// can be followed, and inlined, at compile time. Its data is one pointer to
+// the operation state that code runs against, and operation states are
+// immovable: the operation being started, or the operation that contains
+// the receiver being completed. The receiver itself is never copied: a
+// receiver needn't be copyable, and it lives in the child, which may be gone
+// by the time the handle runs.
+//
+// A receiver of type R derives from operation_handle<R, Op>, where Op is the
+// operation that contains it. That base holds the Op*, and its
+// complete<Sig>() makes the handle for Sig without running anything; the
+// handle, when run, calls R's private static resume<Sig>(Op&), which does
+// the work. A receiver writes resume, destination<Sig>() and get_env(), but
+// never complete, so it can't do its operation's work before the child has
+// returned. Completions carry no values: a value is constructed at the
+// receiver's destination before the completion is delivered.
 //
 // Where two different typed handles meet (a branch that may complete either
 // way), the common type is the erased handle, or in VARIANT mode a choice of
@@ -62,7 +67,6 @@
 
 namespace th {
 
-struct start_t {}; // the signal an operation state receives
 // The completion tags and lists of signatures are stdexec's.
 using stdexec::set_error_t;
 using stdexec::set_stopped_t;
@@ -70,12 +74,12 @@ using stdexec::set_value_t;
 template <class... Sigs>
 using completion_signatures = stdexec::completion_signatures<Sigs...>;
 
-template <class T = void, class Sig = void>
+template <class... Ts>
 class operation_handle;
 
 // The erased handle: returned in two registers on x86-64 and AArch64.
 template <>
-class operation_handle<void, void> {
+class operation_handle<> {
   public:
     using fn_t = operation_handle (*)(void*) noexcept;
 
@@ -98,51 +102,92 @@ struct no_operation {
     constexpr operator erased_handle() const noexcept { return {}; }
 };
 
-// What a typed handle points at: the operation state that start_t() starts,
-// or the parent of a receiver that receives a completion.
-template <class T, class Sig>
-struct target_of {
-    using type = typename T::operation_type*;
-};
-template <class T>
-struct target_of<T, start_t()> {
-    using type = T*;
-};
-
 template <class H>
 inline constexpr bool is_erased = std::same_as<H, erased_handle>;
 template <class H>
 inline constexpr bool is_none = std::same_as<H, no_operation>;
 
-template <class T, class Sig>
-TH_INLINE erased_handle settle(operation_handle<T, Sig> h) noexcept;
+template <class O>
+concept operation_state = std::is_object_v<O> && requires(O& o) { o.start(); };
 
-// The typed handle.
-template <class T, class Sig>
-class operation_handle {
+template <operation_state Op>
+TH_INLINE erased_handle settle(operation_handle<Op> h) noexcept;
+template <class R, class Tag, class... Args>
+TH_INLINE erased_handle settle(operation_handle<R, Tag(Args...)> h) noexcept;
+
+// Start Op.
+template <operation_state Op>
+class operation_handle<Op> {
   public:
-    using target_type = typename target_of<T, Sig>::type;
+    TH_INLINE explicit operation_handle(Op* op) noexcept : op_(op) {}
 
-    TH_INLINE explicit operation_handle(target_type t) noexcept : t_(t) {}
+    TH_INLINE decltype(auto) operator()() const noexcept { return op_->start(); }
 
-    TH_INLINE decltype(auto) operator()() const noexcept {
-        if constexpr (std::same_as<Sig, start_t()>) {
-            return t_->start();
-        } else {
-            return T::template complete<Sig>(*t_);
-        }
-    }
-
-    // Erasure: {a function for this T and Sig, the target as data}. The
-    // target is always one pointer, so every typed handle can be erased.
-    operator erased_handle() const noexcept { return {&thunk, static_cast<void*>(t_)}; }
+    // Erasure: {a function for this Op, the operation as data}.
+    operator erased_handle() const noexcept { return {&thunk, static_cast<void*>(op_)}; }
 
   private:
     static erased_handle thunk(void* data) noexcept {
-        return settle(operation_handle(static_cast<target_type>(data)));
+        return settle(operation_handle(static_cast<Op*>(data)));
     }
 
-    target_type t_;
+    Op* op_;
+};
+
+// The base of a receiver of type R, contained in an operation of type Op: a
+// handle with no completion chosen yet. It can't be run; complete<Sig>()
+// chooses one. Op may be incomplete where R derives from this, as it is for
+// a receiver defined inside its operation, so nothing here may constrain it.
+template <class R, class Op>
+class operation_handle<R, Op> {
+  public:
+    TH_INLINE explicit operation_handle(Op* op) noexcept : op_(op) {}
+
+    // Makes the handle for Sig; runs nothing.
+    template <class Sig>
+    TH_INLINE operation_handle<R, Sig> complete() const noexcept {
+        return operation_handle<R, Sig>(static_cast<void*>(op_));
+    }
+
+  protected:
+    TH_INLINE Op* op() const noexcept { return op_; }
+
+  private:
+    template <class...>
+    friend class operation_handle;
+
+    // The one place the pointer goes back to Op*.
+    template <class Sig>
+    TH_INLINE static auto run(void* op) noexcept {
+        return R::template resume<Sig>(*static_cast<Op*>(op));
+    }
+
+    Op* op_;
+};
+
+// Complete a receiver of type R with Tag(Args...). The pointer is to R's
+// operation; only R's base makes these, and only it turns the pointer back.
+template <class R, class Tag, class... Args>
+class operation_handle<R, Tag(Args...)> {
+  public:
+    TH_INLINE decltype(auto) operator()() const noexcept {
+        return R::template run<Tag(Args...)>(op_);
+    }
+
+    // Erasure: {a function for this R and signature, the operation as data}.
+    operator erased_handle() const noexcept { return {&thunk, op_}; }
+
+  private:
+    template <class...>
+    friend class operation_handle;
+
+    TH_INLINE explicit operation_handle(void* op) noexcept : op_(op) {}
+
+    static erased_handle thunk(void* data) noexcept {
+        return settle(operation_handle(data));
+    }
+
+    void* op_;
 };
 
 // Lookups over a pack go through an array rather than a fold expression or a
@@ -303,9 +348,14 @@ struct reaches<Target, hlist<Visited...>, H> {
 // A loop's head: a typed handle whose own chain can come back to it.
 template <class H>
 inline constexpr bool is_loop_head = false;
-template <class T, class Sig>
-inline constexpr bool is_loop_head<operation_handle<T, Sig>> =
-    reaches<operation_handle<T, Sig>, hlist<>, operation_handle<T, Sig>>::value;
+template <operation_state Op>
+inline constexpr bool is_loop_head<operation_handle<Op>> =
+    reaches<operation_handle<Op>, hlist<>, operation_handle<Op>>::value;
+template <class R, class Tag, class... Args>
+inline constexpr bool is_loop_head<operation_handle<R, Tag(Args...)>> =
+    reaches<operation_handle<R, Tag(Args...)>,
+            hlist<>,
+            operation_handle<R, Tag(Args...)>>::value;
 
 // One trip round a loop: back at the head, or out of the loop.
 template <class Head>
@@ -373,8 +423,12 @@ TH_INLINE erased_handle settle_(H h) noexcept {
     }
 }
 
-template <class T, class Sig>
-TH_INLINE erased_handle settle(operation_handle<T, Sig> h) noexcept {
+template <operation_state Op>
+TH_INLINE erased_handle settle(operation_handle<Op> h) noexcept {
+    return settle_<>(h);
+}
+template <class R, class Tag, class... Args>
+TH_INLINE erased_handle settle(operation_handle<R, Tag(Args...)> h) noexcept {
     return settle_<>(h);
 }
 template <class... Hs>
@@ -473,31 +527,29 @@ TH_INLINE auto either(bool first, F f, G g) noexcept
 
 // A receiver r of type R provides
 //
-//   typename R::operation_type      its parent's type
-//   r.operation_state()             a pointer to its parent
-//   R::complete<Sig>(op)            static: deliver Sig to the parent op, and
-//                                   return what runs next
-//   r.destination<Sig>()            where Sig's payload goes
+//   r.complete<Sig>()      a handle for delivering Sig; runs nothing
+//   r.destination<Sig>()   where Sig's payload goes
 //   r.get_env()
 //
-// Only the child calls the last two, while it and its receiver are alive.
+// A receiver deriving from operation_handle<R, Op> gets complete from there.
+// The erased boundary's receiver writes its own, returning an erased handle.
 
-// Delivering a completion at once, as a plain call.
-template <class Sig, class R>
-TH_INLINE auto complete(R& rcvr) noexcept {
-    return R::template complete<Sig>(*rcvr.operation_state());
-}
-
-// Delivering a signal from inside another delivery: the one place the mode
-// shows. EAGER calls at once (the call nests); the others return a handle.
+// Delivering a completion from inside another delivery: the one place the
+// mode shows. EAGER runs the completion at once (the call nests), unless the
+// receiver handed back an erased handle; the others return the handle.
 template <class Sig, class R>
 TH_INLINE auto later(R& rcvr) noexcept {
+    auto h = rcvr.template complete<Sig>();
 #if TH_MODE == TH_EAGER
-    return th::complete<Sig>(rcvr);
+    if constexpr (is_erased<decltype(h)>) {
+        return h;
+    } else {
+        return h();
+    }
 #elif TH_MODE == TH_ERASED
-    return erased_handle(operation_handle<R, Sig>(rcvr.operation_state()));
+    return erased_handle(h);
 #else // TYPED, VARIANT
-    return operation_handle<R, Sig>(rcvr.operation_state());
+    return h;
 #endif
 }
 
@@ -506,9 +558,9 @@ TH_INLINE auto start_later(Op& op) noexcept {
 #if TH_MODE == TH_EAGER
     return op.start();
 #elif TH_MODE == TH_ERASED
-    return erased_handle(operation_handle<Op, start_t()>(&op));
+    return erased_handle(operation_handle<Op>(&op));
 #else // TYPED, VARIANT
-    return operation_handle<Op, start_t()>(&op);
+    return operation_handle<Op>(&op);
 #endif
 }
 

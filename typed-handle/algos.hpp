@@ -11,9 +11,10 @@
 // A start or completion returns whatever handle it ends with: in TYPED mode
 // a typed handle where only one outcome is possible, and the erased handle
 // where outcomes branch (either(), common_handle_t). A receiver's
-// environment comes from its parent through get_env(). A completion runs
-// against the receiver's parent, not the receiver, so receivers are moved,
-// never copied, and what a completion needs lives in an operation state.
+// environment comes from its parent through get_env(). A receiver derives
+// from operation_handle<R, Op>, writing resume<Sig>() for the work a
+// completion does; receivers are moved, never copied, and what a completion
+// needs lives in an operation state.
 #pragma once
 #include "env.hpp"
 #include "handle.hpp"
@@ -38,13 +39,11 @@ using later_t = decltype(later<Sig>(std::declval<R&>()));
 // against the real receiver).
 template <class Env>
 struct probe_receiver {
-    struct operation_type;
-    operation_type* operation_state() const noexcept;
     template <class Sig>
     void* destination() noexcept;
     template <class Sig>
-    static no_operation complete(operation_type&) noexcept;
-    Env                 get_env() const noexcept;
+    no_operation complete() const noexcept;
+    Env          get_env() const noexcept;
 };
 template <class S, class Env>
 inline constexpr bool nothrow_connect =
@@ -167,31 +166,34 @@ struct then_op {
     using child_sigs = completions_of_t<Child, env_of_t<R>>;
     using filtered   = select_t<Tag, child_sigs>; // the completions F handles
 
-    struct rcvr_t {
-        using operation_type = then_op;
-        then_op* op;
-
-        TH_INLINE then_op* operation_state() const noexcept { return op; }
+    struct rcvr_t : operation_handle<rcvr_t, then_op> {
+        using base_t = operation_handle<rcvr_t, then_op>;
+        using base_t::base_t;
 
         template <class Sig>
         void* destination() noexcept {
             if constexpr (same_as<tag_of_t<Sig>, Tag>) {
-                return op->held.address(); // filtered: F needs it
+                return this->op()->held.address(); // filtered: F needs it
             } else {
-                return destination_of<R, Sig>(op->rcvr); // passed through
+                return destination_of<R, Sig>(this->op()->rcvr); // passed through
             }
         }
 
+        TH_INLINE env_of_t<R> get_env() const noexcept {
+            return th::get_env(this->op()->rcvr);
+        }
+
+      private:
+        friend base_t;
+
         template <class Sig>
-        TH_INLINE static auto complete(then_op& self) noexcept {
+        TH_INLINE static auto resume(then_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, Tag>) {
                 return self.template invoke<Sig>();
             } else {
                 return later<Sig>(self.rcvr);
             }
         }
-
-        TH_INLINE env_of_t<R> get_env() const noexcept { return th::get_env(op->rcvr); }
     };
 
     F                               f;
@@ -319,50 +321,58 @@ struct let_op {
     template <std::size_t I>
     using step_at = let_step<F, env_of_t<R>, sig_at<I>>;
 
-    struct rcvr1_t { // the first child's
-        using operation_type = let_op;
-        let_op* op;
-
-        TH_INLINE let_op* operation_state() const noexcept { return op; }
+    struct rcvr1_t : operation_handle<rcvr1_t, let_op> { // the first child's
+        using base_t = operation_handle<rcvr1_t, let_op>;
+        using base_t::base_t;
 
         template <class Sig>
         void* destination() noexcept {
             if constexpr (!same_as<tag_of_t<Sig>, Tag>) {
-                return destination_of<R, Sig>(op->rcvr);
+                return destination_of<R, Sig>(this->op()->rcvr);
             } else if constexpr (sig_traits<Sig>::has_references) {
-                return op->scratch.address(); // addresses, copied in next()
+                return this->op()->scratch.address(); // addresses, copied in next()
             } else {
-                return op->kept.address(); // kept: F's sender may borrow it
+                return this->op()->kept.address(); // kept: F's sender may borrow it
             }
         }
 
+        TH_INLINE env_of_t<R> get_env() const noexcept {
+            return th::get_env(this->op()->rcvr);
+        }
+
+      private:
+        friend base_t;
+
         template <class Sig>
-        TH_INLINE static auto complete(let_op& self) noexcept {
+        TH_INLINE static auto resume(let_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, Tag>) {
                 return self.template next<index_in<Sig, filtered>>();
             } else {
                 return later<Sig>(self.rcvr);
             }
         }
-
-        TH_INLINE env_of_t<R> get_env() const noexcept { return th::get_env(op->rcvr); }
     };
 
-    struct rcvr2_t { // the second child's: everything passes through
-        using operation_type = let_op;
-        let_op* op;
-
-        TH_INLINE let_op* operation_state() const noexcept { return op; }
+    struct rcvr2_t : operation_handle<rcvr2_t, let_op> { // the second child's: everything
+                                                         // passes through
+        using base_t = operation_handle<rcvr2_t, let_op>;
+        using base_t::base_t;
 
         template <class Sig>
         void* destination() noexcept {
-            return destination_of<R, Sig>(op->rcvr);
+            return destination_of<R, Sig>(this->op()->rcvr);
         }
+        TH_INLINE env_of_t<R> get_env() const noexcept {
+            return th::get_env(this->op()->rcvr);
+        }
+
+      private:
+        friend base_t;
+
         template <class Sig>
-        TH_INLINE static auto complete(let_op& self) noexcept {
+        TH_INLINE static auto resume(let_op& self) noexcept {
             return later<Sig>(self.rcvr);
         }
-        TH_INLINE env_of_t<R> get_env() const noexcept { return th::get_env(op->rcvr); }
     };
 
     template <std::size_t I>
@@ -582,26 +592,36 @@ struct when_all_op {
     }();
 
     template <std::size_t I>
-    struct rcvr_t {
-        using operation_type = when_all_op;
-        when_all_op* op;
-
-        TH_INLINE when_all_op* operation_state() const noexcept { return op; }
+    struct rcvr_t : operation_handle<rcvr_t<I>, when_all_op> {
+        using base_t = operation_handle<rcvr_t, when_all_op>;
+        using base_t::base_t;
 
         template <class Sig>
         void* destination() noexcept {
             if constexpr (same_as<tag_of_t<Sig>, set_error_t>) {
                 // staged: several may fail
-                return op->template part<I>().errors.address();
+                return this->op()->template part<I>().errors.address();
             } else if constexpr (direct<Sig>) {
-                return op->template element<offset<I>>(); // into our parent's storage
+                return this->op()
+                    ->template element<offset<I>>(); // into our parent's storage
             } else {
-                return op->template part<I>().values.address();
+                return this->op()->template part<I>().values.address();
             }
         }
 
+        // The children's stop token is when_all's own; the rest is the parent's.
+        // (Named, not deduced: a child asks for it while when_all_op is still
+        // being defined.)
+        TH_INLINE when_all_env_t<env_of_t<R>> get_env() const noexcept {
+            return {when_all_env_prop{this->op()->stop_source.get_token()},
+                    th::get_env(this->op()->rcvr)};
+        }
+
+      private:
+        friend base_t;
+
         template <class Sig>
-        TH_INLINE static auto complete(when_all_op& self) noexcept {
+        TH_INLINE static auto resume(when_all_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, set_error_t>) {
                 self.template part<I>().error_index = int(index_in<Sig, error_list<I>>);
                 self.fail(int(I));
@@ -611,14 +631,6 @@ struct when_all_op {
                 self.template part<I>().has_value = true;
             }
             return self.arrive();
-        }
-
-        // The children's stop token is when_all's own; the rest is the parent's.
-        // (Named, not deduced: a child asks for it while when_all_op is still
-        // being defined.)
-        TH_INLINE when_all_env_t<env_of_t<R>> get_env() const noexcept {
-            return {when_all_env_prop{op->stop_source.get_token()},
-                    th::get_env(op->rcvr)};
         }
     };
 
@@ -876,7 +888,7 @@ when_all_sender<Ss...> when_all(Ss... ss) {
 
 // ---- repeat_until ---------------------------------------------------------
 // Restarts its child until the child's value, converted to bool, is true,
-// then completes with set_value_t(). The restart is a deferred start_t()
+// then completes with set_value_t(). The restart is a deferred start
 // delivered to the child's new operation state: no scheduler, no added
 // completion, no stack growth unless the mode is EAGER.
 template <class Child, class R>
@@ -885,23 +897,28 @@ struct repeat_until_op {
     using child_sigs = completions_of_t<Child, env_of_t<R>>;
     using value_list = select_t<set_value_t, child_sigs>;
 
-    struct rcvr_t {
-        using operation_type = repeat_until_op;
-        repeat_until_op* op;
-
-        TH_INLINE repeat_until_op* operation_state() const noexcept { return op; }
+    struct rcvr_t : operation_handle<rcvr_t, repeat_until_op> {
+        using base_t = operation_handle<rcvr_t, repeat_until_op>;
+        using base_t::base_t;
 
         template <class Sig>
         void* destination() noexcept {
             if constexpr (same_as<tag_of_t<Sig>, set_value_t>) {
-                return op->flag.address();
+                return this->op()->flag.address();
             } else {
-                return destination_of<R, Sig>(op->rcvr);
+                return destination_of<R, Sig>(this->op()->rcvr);
             }
         }
 
+        TH_INLINE env_of_t<R> get_env() const noexcept {
+            return th::get_env(this->op()->rcvr);
+        }
+
+      private:
+        friend base_t;
+
         template <class Sig>
-        TH_INLINE static auto complete(repeat_until_op& self) noexcept {
+        TH_INLINE static auto resume(repeat_until_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, set_value_t>) {
                 bool done =
                     apply_payload<Sig>(self.flag.address(), [](auto&& b) noexcept {
@@ -914,8 +931,6 @@ struct repeat_until_op {
                 return later<Sig>(self.rcvr);
             }
         }
-
-        TH_INLINE env_of_t<R> get_env() const noexcept { return th::get_env(op->rcvr); }
     };
 
     using child_op_t = connect_result_t<Child&&, rcvr_t>;
@@ -1051,12 +1066,10 @@ inline constexpr auto table_of = Op::make_table();
 
 template <class Sigs>
 struct erased_receiver {
-    using operation_type = record;
     record* k;
     using list                     = as_list_t<Sigs>;
     static constexpr std::size_t n = size_of<list>;
 
-    TH_INLINE record*    operation_state() const noexcept { return k; }
     TH_INLINE erased_env get_env() const noexcept { return {k}; }
 
     template <class Sig>
@@ -1065,11 +1078,11 @@ struct erased_receiver {
             ->destination[index_in<Sig, list>](k);
     }
     template <class Sig>
-    TH_INLINE static erased_handle complete(record& self) noexcept {
+    TH_INLINE erased_handle complete() const noexcept {
         // returned, not called
-        return {static_cast<const boundary_table<n>*>(self.table)
-                    ->resume[index_in<Sig, list>],
-                &self};
+        return {
+            static_cast<const boundary_table<n>*>(k->table)->resume[index_in<Sig, list>],
+            k};
     }
 };
 
@@ -1085,7 +1098,7 @@ struct boundary_op : record {
     }
     template <class Sig>
     static erased_handle resume(void* k) noexcept {
-        return settle(th::complete<Sig>(self_of(k)->rcvr));
+        return settle(self_of(k)->rcvr.template complete<Sig>());
     }
     template <class Sig>
     static void* dest(void* k) noexcept {
@@ -1190,31 +1203,33 @@ struct root_state {
 // Move-only, as the standard allows, so that nothing here can copy a
 // receiver.
 template <class Sigs, class Token = never_stop_token>
-struct root_rcvr {
-    using operation_type = root_state<Sigs, Token>;
-    operation_type* st;
+struct root_rcvr : operation_handle<root_rcvr<Sigs, Token>, root_state<Sigs, Token>> {
+    using state_t = root_state<Sigs, Token>;
+    using base_t  = operation_handle<root_rcvr, state_t>;
 
-    explicit root_rcvr(operation_type* s) noexcept : st(s) {}
+    explicit root_rcvr(state_t* s) noexcept : base_t(s) {}
     root_rcvr(root_rcvr&&) noexcept = default;
     root_rcvr(const root_rcvr&)     = delete;
-
-    TH_INLINE operation_type* operation_state() const noexcept { return st; }
 
     TH_INLINE auto get_env() const noexcept {
         if constexpr (unstoppable<Token>) {
             return empty_env{};
         } else {
-            return prop<get_stop_token_t, Token>{st->token};
+            return prop<get_stop_token_t, Token>{this->op()->token};
         }
     }
 
     template <class Sig>
     void* destination() noexcept {
-        return st->storage.address();
+        return this->op()->storage.address();
     }
+
+  private:
+    friend base_t;
+
     template <class Sig>
-    TH_INLINE static no_operation complete(operation_type& self) noexcept {
-        self.which = int(index_in<Sig, typename operation_type::list>);
+    TH_INLINE static no_operation resume(state_t& self) noexcept {
+        self.which = int(index_in<Sig, typename state_t::list>);
         return {};
     }
 };

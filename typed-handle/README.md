@@ -5,16 +5,20 @@ completion hands back to be run next. This experiment adds a typed handle
 beside it, by analogy with `coroutine_handle<Promise>` and
 `coroutine_handle<>`:
 
-- `operation_handle<R, Sig>` delivers completion `Sig` to a receiver of type
-  `R`. It holds a copy of the receiver and, when run, calls
-  `r.complete<Sig>()`. The pair is what `how` says in the erased form, lifted
-  from values into types.
+- `operation_handle<R, Sig>` delivers completion `Sig` through a receiver
+  of type `R`. It holds a pointer to the receiver's parent, an
+  `R::operation_type*`, and when run calls `R::complete<Sig>(*op)`. The
+  receiver itself is never copied: the standard doesn't require receivers to
+  be copyable, and the child that holds one may be gone by the time the
+  handle runs. The pair is what `how` says in the erased form, lifted from
+  values into types.
 - `operation_handle<Op, start_t()>` delivers `start_t()` to an operation
   state: it holds `Op*` and, when run, calls `op->start()`. So one family,
   "deliver `Sig` to a `T`", covers starting and completing.
 - `operation_handle<>` is the erased form: two words, a function and a data
-  pointer, the function delivering one signal to one target. A typed handle
-  converts to it implicitly, if its target fits in a pointer.
+  pointer, the function delivering one signal to one target. Every typed
+  handle converts to it implicitly, since every typed handle is one pointer
+  to an operation state.
 - `no_operation` is the typed "nothing to run".
 
 Because the type of a typed handle names the code it runs, a chain of them
@@ -61,7 +65,8 @@ depend on it.
 Values never travel with a handle. A completion `Tag(As...)` is delivered in
 two steps: its payload is constructed at the receiver's destination for that
 signature, then the completion is delivered. So a completion handle is only
-the receiver, and receivers here are one pointer to their parent.
+a pointer to the receiver's parent, with the receiver's type and the
+signature naming the code to run.
 
 | Signature | Payload at the destination |
 |---|---|
@@ -115,12 +120,12 @@ scenario completes inline.
 
 | Scenario | EAGER | ERASED | TYPED | VARIANT | Indirect: E / Er / T / V |
 |---|---|---|---|---|---|
-| `chain4`: four `then`s that can't throw | 9 / 8 | 86 / 77 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
-| `chain4_throwing`: four `then`s that may throw | 51 / 35 | 154 / 112 | 135 / 103 | 67 / 35 | 0 / 4 / 3–4 / 0 |
-| `let`: `let_value` starting a `just` | 17 / 8 | 75 / 62 | 17 / 8 | 17 / 8 | 0 / 3 / 0 / 0 |
-| `both`: `when_all` of two `then`s | 60 / 54 | 110 / 99 | 70 / 73 | 77 / 57 | 0 / 3 / 1 / 0 |
-| `boundary`: `then` around an erased boundary around `then` | 70 / 58 | 93 / 80 | 70 / 60 | 70 / 60 | 2 / 5 / 2 / 2 |
-| `repeat`: per iteration | 11 / 34 | 45 / 44 | 29 / 32 | 26 / 23 | 0 / 3 / 1 / 0 |
+| `chain4`: four `then`s that can't throw | 9 / 8 | 86 / 73 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
+| `chain4_throwing`: four `then`s that may throw | 51 / 35 | 154 / 108 | 135 / 100 | 67 / 29 | 0 / 4 / 3–4 / 0 |
+| `let`: `let_value` starting a `just` | 17 / 8 | 75 / 61 | 17 / 8 | 17 / 8 | 0 / 3 / 0 / 0 |
+| `both`: `when_all` of two `then`s | 60 / 54 | 110 / 96 | 70 / 70 | 77 / 54 | 0 / 3 / 1 / 0 |
+| `boundary`: `then` around an erased boundary around `then` | 70 / 58 | 93 / 78 | 70 / 58 | 70 / 58 | 2 / 5 / 2 / 2 |
+| `repeat`: per iteration | 11 / 34 | 45 / 43 | 29 / 31 | 26 / 24 | 0 / 3 / 1 / 0 |
 
 Each cell is GCC / Clang. In the indirect column, where GCC and Clang differ
 the cell gives a range, GCC's count first.
@@ -135,14 +140,14 @@ the cell gives a range, GCC's count first.
 3. **Erasing where outcomes meet is nearly as expensive, on the path that
    is taken.** A `then` whose function may throw has two outcomes, so in
    TYPED mode its completion is erased. Nothing throws in `chain4_throwing`,
-   yet it costs 135 / 103 instructions against EAGER's 51 / 35. The type is
+   yet it costs 135 / 100 instructions against EAGER's 51 / 35. The type is
    erased whichever outcome happens, so the common path pays too. (Before
    measuring, Claude had expected this cost to be small because the error
    side is cold. It isn't.)
 4. **A choice recovers it with Clang, and most of it with GCC.** In
    VARIANT mode the same completion is `choice<value handle, error handle>`,
    and following it branches on an index, each branch carrying on at compile
-   time: `chain4_throwing` is 35 with Clang (EAGER 35) and 67 with GCC
+   time: `chain4_throwing` is 29 with Clang (EAGER 35) and 67 with GCC
    (EAGER 51), with no indirect calls. `choice` is a hand-written tagged
    union; with `std::variant` as its storage, GCC did worse (measured on the
    earlier version). The rest of GCC's gap is unexplained.
@@ -154,9 +159,9 @@ the cell gives a range, GCC's count first.
    Lewis Baker's `resume_continuation` in `continuation.hpp`, applied to
    typed handles. It needs the loop's branch to be typed: in VARIANT mode
    `repeat_until`'s completion is a `choice` of ending and restarting, so the
-   whole cycle is known, and an iteration costs 26 / 23 instructions with no
+   whole cycle is known, and an iteration costs 26 / 24 instructions with no
    indirect call. In TYPED mode the branch is erased, so there is no typed
-   cycle to find; an iteration costs 29 / 32 with one indirect call. Nesting
+   cycle to find; an iteration costs 29 / 31 with one indirect call. Nesting
    costs 11 with GCC, which turns its recursion into a sibling call, and 34
    with Clang, which doesn't (see 8).
 6. **An erased boundary costs about the same in TYPED and VARIANT as in
@@ -261,12 +266,12 @@ root, with leaves that don't ask. Same measurements as above.
 
 | Scenario | EAGER | ERASED | TYPED | VARIANT | Indirect: E / Er / T / V |
 |---|---|---|---|---|---|
-| `chain4_unstoppable`: `chain4`'s leaf asks, but there is no token | 9 / 8 | 86 / 77 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
-| `chain4_checked` | 42 / 43 | 92 / 87 | 55 / 63 | 47 / 53 | 0 / 5 / 1 / 0 |
-| `both_live` | 144 / 116 | 191 / 158 | 154 / 138 | 146 / 122 | 0 / 3 / 1 / 0 |
-| `both_checked` | 156 / 129 | 200 / 173 | 188 / 161 | 161 / 133 | 0 / 3–5 / 1–3 / 0 |
-| `boundary_checked` | 88 / 80 | 113 / 99 | 98 / 86 | 99 / 78 | 3 / 6 / 4 / 3 |
-| `repeat_checked`: per iteration | 31.5 / 40 | 54 / 53 | 47 / 47 | 38 / 34 | 0 / 3 / 2 / 0 |
+| `chain4_unstoppable`: `chain4`'s leaf asks, but there is no token | 9 / 8 | 86 / 73 | 9 / 8 | 9 / 8 | 0 / 4 / 0 / 0 |
+| `chain4_checked` | 42 / 43 | 92 / 82 | 55 / 55 | 47 / 43 | 0 / 5 / 1 / 0 |
+| `both_live` | 144 / 116 | 191 / 155 | 154 / 132 | 146 / 116 | 0 / 3 / 1 / 0 |
+| `both_checked` | 154 / 127 | 200 / 169 | 188 / 157 | 161 / 127 | 0 / 3–5 / 1–3 / 0 |
+| `boundary_checked` | 88 / 80 | 113 / 96 | 98 / 83 | 99 / 80 | 3 / 6 / 4 / 3 |
+| `repeat_checked`: per iteration | 31.5 / 40 | 54 / 52 | 47 / 46 | 38 / 33 | 0 / 3 / 2 / 0 |
 
 12. **Forwarding environments costs nothing where nothing asks.** A leaf
     that asks a token which can't be stopped compiles to `just`:
@@ -277,8 +282,8 @@ root, with leaves that don't ask. Same measurements as above.
     a parent that can't be stopped.)
 13. **Every leaf that can be stopped is a place where outcomes meet.** Asking
     a live token adds 33 / 35 instructions to `chain4` in EAGER mode. In TYPED
-    mode the leaf's branch (stopped, or a value) is erased: +46 / +55 and an
-    indirect call. In VARIANT mode it's a `choice`: +38 / +45, no indirect
+    mode the leaf's branch (stopped, or a value) is erased: +46 / +47 and an
+    indirect call. In VARIANT mode it's a `choice`: +38 / +35, no indirect
     call. So stop tokens make points 3 and 4 above matter more, not less.
 14. **Forwarding a parent's stop into `when_all` costs more than the rest of
     `when_all`:** 59 to 84 instructions (`both_live` against `both`), in
@@ -288,14 +293,21 @@ root, with leaves that don't ask. Same measurements as above.
 15. **Across the erased boundary the stop token costs one indirect call,**
     the query function in the record's table, and 18 or 22 instructions in
     EAGER mode (`boundary_checked` against `boundary`).
-16. **A loop that asks every iteration** costs 12 / 11 more per iteration in
+16. **A loop that asks every iteration** costs 12 / 9 more per iteration in
     VARIANT mode, where the static loop still runs with no indirect call,
     and 18 / 15 in TYPED mode, with a second indirect call per iteration.
-17. **Receivers stay one pointer.** The root's stop token lives in its state,
-    not in its receiver: a receiver holding a token as well would be two
-    words, and couldn't be erased into `{function, data}` (the conversion's
-    `static_assert`). Everything an environment holds has to live in an
-    operation state, as `when_all`'s stop source does.
+17. **Completions run against operation states, so receivers can be
+    anything.** A completion handle points at the receiver's parent, so its
+    erased form is always `{function, op*}`, whatever the receiver holds.
+    The root's receiver is move-only, and every algorithm moves the
+    receiver it's given, so the checks would fail to compile if anything
+    copied one. (An earlier version copied the receiver into the handle,
+    which required receivers to be trivially copyable and one pointer wide,
+    so the root kept its stop token in its state for that reason; it still
+    does, now because that's where its completions run. Pointing at the
+    parent changed no indirect-branch count and changed instruction counts
+    by -10 to +2, almost all of them with Clang; the tables above are
+    current.)
 
 ### What generality cost
 
@@ -375,7 +387,7 @@ value type, `then`'s function returned a value, errors were
 - The pair `<R, Sig>` maps onto the erased form cleanly. Here the erased form
   is `{function, data}` with one function per `(T, Sig)`, so there is no
   `how` at all; converting to `{record, how}` instead would need every
-  receiver's target to start with a record.
+  receiver's parent to start with a record.
 
 ## What it doesn't show
 

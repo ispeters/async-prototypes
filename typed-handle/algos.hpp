@@ -11,8 +11,9 @@
 // A start or completion returns whatever handle it ends with: in TYPED mode
 // a typed handle where only one outcome is possible, and the erased handle
 // where outcomes branch (either(), common_handle_t). A receiver's
-// environment comes from its parent through get_env(); receivers stay one
-// pointer, so whatever an environment holds lives in an operation state.
+// environment comes from its parent through get_env(). A completion runs
+// against the receiver's parent, not the receiver, so receivers are moved,
+// never copied, and what a completion needs lives in an operation state.
 #pragma once
 #include "env.hpp"
 #include "handle.hpp"
@@ -37,11 +38,13 @@ using later_t = decltype(later<Sig>(std::declval<R&>()));
 // against the real receiver).
 template <class Env>
 struct probe_receiver {
+    struct operation_type;
+    operation_type* operation_state() const noexcept;
     template <class Sig>
     void* destination() noexcept;
     template <class Sig>
-    no_operation complete() noexcept;
-    Env          get_env() const noexcept;
+    static no_operation complete(operation_type&) noexcept;
+    Env                 get_env() const noexcept;
 };
 template <class S, class Env>
 inline constexpr bool nothrow_connect =
@@ -85,7 +88,7 @@ struct just_sender {
 
     template <class R>
     op<R> connect(R rcvr) && noexcept(nothrow) {
-        return {rcvr, std::move(vals)};
+        return {std::move(rcvr), std::move(vals)};
     }
 };
 template <class... Ts>
@@ -142,7 +145,7 @@ struct just_unless_stopped_sender {
 
     template <class R>
     op<R> connect(R rcvr) && noexcept(nothrow) {
-        return {rcvr, std::move(vals)};
+        return {std::move(rcvr), std::move(vals)};
     }
 };
 template <class... Ts>
@@ -165,7 +168,10 @@ struct then_op {
     using filtered   = select_t<Tag, child_sigs>; // the completions F handles
 
     struct rcvr_t {
+        using operation_type = then_op;
         then_op* op;
+
+        TH_INLINE then_op* operation_state() const noexcept { return op; }
 
         template <class Sig>
         void* destination() noexcept {
@@ -177,11 +183,11 @@ struct then_op {
         }
 
         template <class Sig>
-        TH_INLINE auto complete() noexcept {
+        TH_INLINE static auto complete(then_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, Tag>) {
-                return op->template invoke<Sig>();
+                return self.template invoke<Sig>();
             } else {
-                return later<Sig>(op->rcvr);
+                return later<Sig>(self.rcvr);
             }
         }
 
@@ -196,7 +202,9 @@ struct then_op {
     then_op(Child&& c, F fn, R r) noexcept(std::is_nothrow_move_constructible_v<F> &&
                                            noexcept(th::connect(std::declval<Child>(),
                                                                 std::declval<rcvr_t>())))
-        : f(std::move(fn)), rcvr(r), child(th::connect(std::move(c), rcvr_t{this})) {}
+        : f(std::move(fn)),
+          rcvr(std::move(r)),
+          child(th::connect(std::move(c), rcvr_t{this})) {}
     then_op(then_op&&) = delete;
 
     TH_INLINE auto start() & noexcept { return th::start(child); }
@@ -253,7 +261,7 @@ struct then_sender {
     template <class R>
     then_op<Tag, Child, F, R> connect(R rcvr) && noexcept(
         std::is_nothrow_constructible_v<then_op<Tag, Child, F, R>, Child, F, R>) {
-        return {std::move(child), std::move(f), rcvr};
+        return {std::move(child), std::move(f), std::move(rcvr)};
     }
 };
 template <class Child, class F>
@@ -312,7 +320,10 @@ struct let_op {
     using step_at = let_step<F, env_of_t<R>, sig_at<I>>;
 
     struct rcvr1_t { // the first child's
+        using operation_type = let_op;
         let_op* op;
+
+        TH_INLINE let_op* operation_state() const noexcept { return op; }
 
         template <class Sig>
         void* destination() noexcept {
@@ -326,11 +337,11 @@ struct let_op {
         }
 
         template <class Sig>
-        TH_INLINE auto complete() noexcept {
+        TH_INLINE static auto complete(let_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, Tag>) {
-                return op->template next<index_in<Sig, filtered>>();
+                return self.template next<index_in<Sig, filtered>>();
             } else {
-                return later<Sig>(op->rcvr);
+                return later<Sig>(self.rcvr);
             }
         }
 
@@ -338,15 +349,18 @@ struct let_op {
     };
 
     struct rcvr2_t { // the second child's: everything passes through
+        using operation_type = let_op;
         let_op* op;
+
+        TH_INLINE let_op* operation_state() const noexcept { return op; }
 
         template <class Sig>
         void* destination() noexcept {
             return destination_of<R, Sig>(op->rcvr);
         }
         template <class Sig>
-        TH_INLINE auto complete() noexcept {
-            return later<Sig>(op->rcvr);
+        TH_INLINE static auto complete(let_op& self) noexcept {
+            return later<Sig>(self.rcvr);
         }
         TH_INLINE env_of_t<R> get_env() const noexcept { return th::get_env(op->rcvr); }
     };
@@ -380,7 +394,7 @@ struct let_op {
     alignas(sz::op_align) std::byte second[sz::op_size];
     int live = -1; // which completion's arguments and second are in place
 
-    let_op(Child&& c, F fn, R r) : f(std::move(fn)), rcvr(r) {
+    let_op(Child&& c, F fn, R r) : f(std::move(fn)), rcvr(std::move(r)) {
         first.emplace_from([&] { return th::connect(std::move(c), rcvr1_t{this}); });
     }
     let_op(let_op&&) = delete;
@@ -449,7 +463,7 @@ struct let_sender {
 
     template <class R>
     let_op<Tag, Child, F, R> connect(R rcvr) && {
-        return {std::move(child), std::move(f), rcvr};
+        return {std::move(child), std::move(f), std::move(rcvr)};
     }
 };
 template <class Child, class F>
@@ -569,7 +583,10 @@ struct when_all_op {
 
     template <std::size_t I>
     struct rcvr_t {
+        using operation_type = when_all_op;
         when_all_op* op;
+
+        TH_INLINE when_all_op* operation_state() const noexcept { return op; }
 
         template <class Sig>
         void* destination() noexcept {
@@ -584,16 +601,16 @@ struct when_all_op {
         }
 
         template <class Sig>
-        TH_INLINE auto complete() noexcept {
+        TH_INLINE static auto complete(when_all_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, set_error_t>) {
-                op->template part<I>().error_index = int(index_in<Sig, error_list<I>>);
-                op->fail(int(I));
+                self.template part<I>().error_index = int(index_in<Sig, error_list<I>>);
+                self.fail(int(I));
             } else if constexpr (same_as<Sig, set_stopped_t()>) {
-                op->stop();
+                self.stop();
             } else {
-                op->template part<I>().has_value = true;
+                self.template part<I>().has_value = true;
             }
-            return op->arrive();
+            return self.arrive();
         }
 
         // The children's stop token is when_all's own; the rest is the parent's.
@@ -649,7 +666,8 @@ struct when_all_op {
     std::atomic<int> count{int(n)};
     parts_t<std::make_index_sequence<n>> parts;
 
-    when_all_op(std::tuple<Ss...>&& ss, R r) : rcvr(r), parts(std::move(ss), this) {}
+    when_all_op(std::tuple<Ss...>&& ss, R r)
+        : rcvr(std::move(r)), parts(std::move(ss), this) {}
     when_all_op(when_all_op&&) = delete;
 
     template <std::size_t I>
@@ -848,7 +866,7 @@ struct when_all_sender {
 
     template <class R>
     when_all_op<R, Ss...> connect(R rcvr) && {
-        return {std::move(children), rcvr};
+        return {std::move(children), std::move(rcvr)};
     }
 };
 template <class... Ss>
@@ -868,7 +886,10 @@ struct repeat_until_op {
     using value_list = select_t<set_value_t, child_sigs>;
 
     struct rcvr_t {
+        using operation_type = repeat_until_op;
         repeat_until_op* op;
+
+        TH_INLINE repeat_until_op* operation_state() const noexcept { return op; }
 
         template <class Sig>
         void* destination() noexcept {
@@ -880,16 +901,17 @@ struct repeat_until_op {
         }
 
         template <class Sig>
-        TH_INLINE auto complete() noexcept {
+        TH_INLINE static auto complete(repeat_until_op& self) noexcept {
             if constexpr (same_as<tag_of_t<Sig>, set_value_t>) {
-                bool done = apply_payload<Sig>(op->flag.address(), [](auto&& b) noexcept {
-                    return static_cast<bool>(b);
-                });
-                destroy_payload<Sig>(op->flag.address());
-                return op->again(done);
+                bool done =
+                    apply_payload<Sig>(self.flag.address(), [](auto&& b) noexcept {
+                        return static_cast<bool>(b);
+                    });
+                destroy_payload<Sig>(self.flag.address());
+                return self.again(done);
             } else {
-                op->child_op.reset();
-                return later<Sig>(op->rcvr);
+                self.child_op.reset();
+                return later<Sig>(self.rcvr);
             }
         }
 
@@ -906,7 +928,7 @@ struct repeat_until_op {
     storage_for_t<value_list> flag;
     slot<child_op_t>          child_op;
 
-    repeat_until_op(Child&& c, R r) : child(std::move(c)), rcvr(r) {}
+    repeat_until_op(Child&& c, R r) : child(std::move(c)), rcvr(std::move(r)) {}
     repeat_until_op(repeat_until_op&&) = delete;
 
     // Connect a fresh child, then hand back what starting it should be: a
@@ -981,7 +1003,7 @@ struct repeat_until_sender {
 
     template <class R>
     repeat_until_op<Child, R> connect(R rcvr) && {
-        return {std::move(child), rcvr};
+        return {std::move(child), std::move(rcvr)};
     }
 };
 template <class Child>
@@ -1029,10 +1051,12 @@ inline constexpr auto table_of = Op::make_table();
 
 template <class Sigs>
 struct erased_receiver {
+    using operation_type = record;
     record* k;
     using list                     = as_list_t<Sigs>;
     static constexpr std::size_t n = size_of<list>;
 
+    TH_INLINE record*    operation_state() const noexcept { return k; }
     TH_INLINE erased_env get_env() const noexcept { return {k}; }
 
     template <class Sig>
@@ -1041,11 +1065,11 @@ struct erased_receiver {
             ->destination[index_in<Sig, list>](k);
     }
     template <class Sig>
-    TH_INLINE erased_handle complete() noexcept {
+    TH_INLINE static erased_handle complete(record& self) noexcept {
         // returned, not called
-        return {
-            static_cast<const boundary_table<n>*>(k->table)->resume[index_in<Sig, list>],
-            k};
+        return {static_cast<const boundary_table<n>*>(self.table)
+                    ->resume[index_in<Sig, list>],
+                &self};
     }
 };
 
@@ -1061,7 +1085,7 @@ struct boundary_op : record {
     }
     template <class Sig>
     static erased_handle resume(void* k) noexcept {
-        return settle(self_of(k)->rcvr.template complete<Sig>());
+        return settle(th::complete<Sig>(self_of(k)->rcvr));
     }
     template <class Sig>
     static void* dest(void* k) noexcept {
@@ -1091,7 +1115,7 @@ struct boundary_op : record {
 
     boundary_op(Child&& c, R r)
         : record{&table_of<boundary_op>},
-          rcvr(r),
+          rcvr(std::move(r)),
           child(th::connect(std::move(c), erased_receiver<sigs>{opaque<record*>(this)})) {
     }
     boundary_op(boundary_op&&) = delete;
@@ -1115,7 +1139,7 @@ struct boundary_sender {
 
     template <class R>
     boundary_op<Child, R> connect(R rcvr) && {
-        return {std::move(child), rcvr};
+        return {std::move(child), std::move(rcvr)};
     }
 };
 template <class Child>
@@ -1129,7 +1153,7 @@ struct root_state {
     using list = as_list_t<Sigs>;
     storage_for_t<list> storage;
     int                 which = -1; // which completion arrived
-    Token               token;      // here, not in the receiver, which stays one pointer
+    Token               token;      // here, where the root's completions run
 
     root_state()             = default;
     root_state(root_state&&) = delete;
@@ -1163,9 +1187,18 @@ struct root_state {
     }
 };
 
+// Move-only, as the standard allows, so that nothing here can copy a
+// receiver.
 template <class Sigs, class Token = never_stop_token>
 struct root_rcvr {
-    root_state<Sigs, Token>* st;
+    using operation_type = root_state<Sigs, Token>;
+    operation_type* st;
+
+    explicit root_rcvr(operation_type* s) noexcept : st(s) {}
+    root_rcvr(root_rcvr&&) noexcept = default;
+    root_rcvr(const root_rcvr&)     = delete;
+
+    TH_INLINE operation_type* operation_state() const noexcept { return st; }
 
     TH_INLINE auto get_env() const noexcept {
         if constexpr (unstoppable<Token>) {
@@ -1180,8 +1213,8 @@ struct root_rcvr {
         return st->storage.address();
     }
     template <class Sig>
-    TH_INLINE no_operation complete() noexcept {
-        st->which = int(index_in<Sig, typename root_state<Sigs, Token>::list>);
+    TH_INLINE static no_operation complete(operation_type& self) noexcept {
+        self.which = int(index_in<Sig, typename operation_type::list>);
         return {};
     }
 };

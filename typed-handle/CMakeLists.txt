@@ -38,6 +38,7 @@ foreach(mode 0 1 2 3)
         chain4_unstoppable chain4_checked both_live both_checked
         boundary_checked
         repeat_checked scheduled hopped remote remote_checked
+        coin_random opaque_random
     )
         add_test(
             NAME typed_handle.bench.${mode}.${scenario}

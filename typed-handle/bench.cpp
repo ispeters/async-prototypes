@@ -10,10 +10,12 @@
 #include "remote.hpp"
 #include "sched.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 using namespace th;
 
@@ -179,6 +181,62 @@ inplace_stop_source live;
     sink = count;
 }
 
+// The coin scenarios: a leaf completes with a value or an error, by a coin
+// flipped per run; the error is turned back into a value, and both paths
+// meet at the last then. The coins are set at startup from the scenario's
+// name, so the compiler can't see which way a run goes: always heads,
+// alternating, or pseudo-random.
+constexpr unsigned         coin_count = 1u << 16;
+std::vector<unsigned char> coins(coin_count);
+
+struct coin_sender {
+    bool heads;
+
+    template <class Env>
+    static consteval auto get_completion_signatures() {
+        return completion_signatures<set_value_t(int), set_error_t(int)>();
+    }
+    template <class R>
+    struct op {
+        R              rcvr;
+        bool           heads;
+        TH_INLINE auto start() & noexcept {
+            return either(
+                heads,
+                [&] { return th::set_value(rcvr, 1); },
+                [&] { return th::set_error(rcvr, 2); });
+        }
+    };
+    template <class R>
+    op<R> connect(R rcvr) && noexcept {
+        return {std::move(rcvr), heads};
+    }
+};
+
+[[gnu::noinline]] void coin(int i) {
+    auto inc = [](int v) noexcept { return v + 1; };
+    auto neg = [](int e) noexcept { return -e; };
+    run_root(then(upon_error(then(coin_sender{coins[unsigned(i) % coin_count] != 0}, inc),
+                             neg),
+                  inc),
+             [](auto& st) { sink = st.template get<set_value_t(int)>(); });
+}
+
+// The same, with each path calling a function the compiler can't see into,
+// so the two paths can't be merged into straight-line code.
+[[gnu::noinline]] int heads_work(int v) noexcept { return v * 3 + 1; }
+[[gnu::noinline]] int tails_work(int e) noexcept { return e * 5 - 2; }
+
+[[gnu::noinline]] void opaque_coin(int i) {
+    auto inc  = [](int v) noexcept { return v + 1; };
+    auto work = [](int v) noexcept { return heads_work(v); };
+    auto fix  = [](int e) noexcept { return tails_work(e); };
+    run_root(then(upon_error(
+                      then(coin_sender{coins[unsigned(i) % coin_count] != 0}, work), fix),
+                  inc),
+             [](auto& st) { sink = st.template get<set_value_t(int)>(); });
+}
+
 int main(int argc, char** argv) {
     if (argc != 3) {
         std::fprintf(stderr, "usage: %s SCENARIO N\n", argv[0]);
@@ -193,6 +251,21 @@ int main(int argc, char** argv) {
          : !std::strcmp(s, "scheduled")      ? scheduled
                                              : hopped)(n);
         return sink == n ? 0 : 1;
+    }
+    if (!std::strncmp(s, "coin_", 5) || !std::strncmp(s, "opaque_", 7)) {
+        bool          is_opaque = !std::strncmp(s, "opaque_", 7);
+        const char*   pattern   = s + (is_opaque ? 7 : 5);
+        std::uint32_t state     = 12345; // a fixed sequence, the same every run
+        for (unsigned i = 0; i < coin_count; ++i) {
+            state    = state * 1664525u + 1013904223u;
+            coins[i] = !std::strcmp(pattern, "heads")       ? 1
+                       : !std::strcmp(pattern, "alternate") ? (i & 1)
+                                                            : (state >> 31);
+        }
+        for (int i = 0; i < n; ++i) {
+            (is_opaque ? opaque_coin : coin)(i);
+        }
+        return 0;
     }
     void (*f)(int) = !std::strcmp(s, "chain4")               ? chain4
                      : !std::strcmp(s, "chain4_throwing")    ? chain4_throwing

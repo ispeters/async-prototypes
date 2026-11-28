@@ -55,6 +55,7 @@ Everything under "Observed" was run or measured. "Reading" is inference.
 | `checks.cpp` | Results, errors, references, several values and value completions, every channel of `then` and `let`, `when_all`, stopping, a loop's stack depth, completion signatures, which handle types come back, many outcomes meeting (a five-way `when_all` arrival, a 257-way `choice`), a payload that throws part-way, completion on other threads (`sync_wait`, a pool, stop requested from another thread), and the adaptors in `sched.hpp`, `bulk` and `into_variant` |
 | `remote.hpp`, `remote.cpp` | Callees compiled in their own translation unit, behind an erased boundary: each declares its completion signatures, its operation's size and alignment, and `connect`, `start` and `destroy` entry points |
 | `bench.cpp`, `cg.sh` | Scenarios, and instruction counts under Callgrind |
+| `predict.sh` | Wall-clock time and simulated mispredictions for completions that go one way or the other unpredictably |
 
 ## Four modes
 
@@ -480,6 +481,74 @@ handle with `run()`, so a typed chain still runs inline from there.
     which `remote.cpp` checks; how a caller learns it is the question
     P4223's `function` answers with its frame allocator.
 
+### Why GCC trails Clang in VARIANT mode
+
+With Clang, VARIANT costs no more than EAGER in any scenario; with GCC it
+costs 2 to 17 instructions more in eleven of them (the tables above).
+Investigated with GCC's `-fopt-info-inline-missed`, Callgrind's
+per-function and per-line counts, and the generated code; nothing below
+changes the experiment's code.
+
+29. **`both`'s gap is an inlining limit.** In VARIANT mode GCC won't inline
+    `run_root` into the scenario: "`--param large-stack-frame-growth` limit
+    reached" (the `choice`s and the operation states make the frame
+    larger). Raising that limit (with `max-inline-insns-auto`) takes
+    VARIANT's `both` from 89 to 74 instructions, 2 more than EAGER, and
+    every `when_all` scenario loses 18 to 21 instructions in every mode.
+    The other gaps don't move, and `-O3` changes nothing.
+30. **GCC never inlines stdexec's `~inplace_stop_source()`,** in any mode:
+    "callee refers to comdat-local symbols". That's about 19 instructions of
+    every `when_all`, and part of GCC's deficit against Clang that has
+    nothing to do with the mode.
+31. **The other gaps are values kept in memory.** In `chain4_throwing`, GCC's
+    EAGER code and Clang's VARIANT code both reduce the four `then`s to one
+    sign check and `add $4`. GCC's VARIANT code keeps all four checks, stores
+    each step's value at the next destination, writes each `choice`'s index,
+    and reloads each receiver's pointer to its parent from memory: it doesn't
+    see through the path a value takes once a `choice` is involved. Keeping
+    a `choice`'s alternative as one `void*` instead of a byte array (every
+    alternative is at most a pointer) recovers 1 to 4 instructions per
+    scenario, so the representation is a small part of it; the rest wasn't
+    isolated.
+
+### Completions that go unpredictably
+
+A `choice`'s index is a branch, and in the scenarios above it always goes
+the same way. `predict.sh` measures the coin scenarios in `bench.cpp`: a
+leaf completes with a value or an error by a coin flipped per run (always
+heads, alternating, or pseudo-random), the error is turned back into a
+value, and the two paths meet. In the `opaque_` scenarios each path calls a
+function the compiler can't see into, so the paths can't be merged into
+straight-line code. Nanoseconds per run, GCC / Clang, the best of five runs
+of 20 million on a shared 2-core VM (differences under about half a
+nanosecond are noise):
+
+| | heads | alternate | random | random − heads |
+|---|---|---|---|---|
+| `coin_`, EAGER | 1.93 / 1.55 | 1.93 / 1.55 | 1.92 / 1.55 | 0 / 0 |
+| `coin_`, TYPED | 4.08 / 4.00 | 4.48 / 5.02 | 9.95 / 10.20 | +5.9 / +6.2 |
+| `coin_`, VARIANT | 3.69 / 1.55 | 3.76 / 1.56 | 8.82 / 1.56 | +5.1 / 0 |
+| `opaque_`, EAGER | 3.30 / 2.99 | 3.64 / 3.75 | 8.84 / 8.60 | +5.5 / +5.6 |
+| `opaque_`, ERASED | 10.72 / 11.57 | 11.06 / 12.27 | 16.85 / 17.47 | +6.1 / +5.9 |
+| `opaque_`, TYPED | 4.57 / 5.43 | 6.24 / 6.51 | 11.00 / 10.98 | +6.4 / +5.6 |
+| `opaque_`, VARIANT | 3.74 / 2.67 | 4.16 / 4.53 | 9.57 / 8.61 | +5.8 / +5.9 |
+
+32. **Deferring adds no misprediction of its own.** Where the paths can't be
+    merged, a random coin costs 5.5 to 6.4 ns in every mode, EAGER
+    included: the coin's own branch, mispredicted half the time (Callgrind's
+    simulated predictor counts 0.5 conditional mispredictions per run in
+    every mode). A `choice`'s index doesn't add one: the compiler threads it
+    into the branch that chose it.
+33. **Where the paths are small, the visible modes lose the branch
+    altogether.** With `coin_`'s tiny paths, EAGER under both compilers and
+    VARIANT under Clang turn the whole thing into straight-line code, and a
+    random coin costs nothing; TYPED can't, since the paths meet at an
+    erased handle, and VARIANT under GCC doesn't (31).
+34. **An alternating coin costs little, with no pattern by mode:** 0 to
+    1.9 ns more than all heads where the paths can't be merged (VARIANT
+    under Clang the most, then TYPED under GCC), against 5.5 to 6.4 for a
+    random one. The machine's predictors mostly learn alternation.
+
 ## Reading
 
 - The typed handle earns its keep where a delivery has exactly one possible
@@ -514,6 +583,8 @@ handle with `run()`, so a typed chain still runs inline from there.
 
 ## What it doesn't show
 
+- The timings are from one shared VM with one microarchitecture; nothing
+  measures code size or compile time across the modes.
 - Completion on other threads is checked, not measured: the counts are for
   a `run_loop` drained on its own thread. Nothing measures contention or
   wall-clock time, and the queue is a plain mutex and condition variable.

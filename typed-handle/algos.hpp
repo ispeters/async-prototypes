@@ -93,12 +93,12 @@ struct just_sender {
     }
 };
 template <class... Ts>
-just_sender<set_value_t, Ts...> just(Ts... ts) {
-    return {{std::move(ts)...}};
+just_sender<set_value_t, std::decay_t<Ts>...> just(Ts&&... ts) {
+    return {{std::forward<Ts>(ts)...}};
 }
 template <class E>
-just_sender<set_error_t, E> just_error(E e) {
-    return {{std::move(e)}};
+just_sender<set_error_t, std::decay_t<E>> just_error(E&& e) {
+    return {{std::forward<E>(e)}};
 }
 inline just_sender<set_stopped_t> just_stopped() { return {}; }
 
@@ -150,8 +150,8 @@ struct just_unless_stopped_sender {
     }
 };
 template <class... Ts>
-just_unless_stopped_sender<Ts...> just_unless_stopped(Ts... ts) {
-    return {{std::move(ts)...}};
+just_unless_stopped_sender<std::decay_t<Ts>...> just_unless_stopped(Ts&&... ts) {
+    return {{std::forward<Ts>(ts)...}};
 }
 
 // ---- then, upon_error, upon_stopped ---------------------------------------
@@ -269,16 +269,18 @@ struct then_sender {
     }
 };
 template <class Child, class F>
-then_sender<set_value_t, Child, F> then(Child c, F f) {
-    return {std::move(c), std::move(f)};
+then_sender<set_value_t, std::decay_t<Child>, std::decay_t<F>> then(Child&& c, F&& f) {
+    return {std::forward<Child>(c), std::forward<F>(f)};
 }
 template <class Child, class F>
-then_sender<set_error_t, Child, F> upon_error(Child c, F f) {
-    return {std::move(c), std::move(f)};
+then_sender<set_error_t, std::decay_t<Child>, std::decay_t<F>> upon_error(Child&& c,
+                                                                          F&&     f) {
+    return {std::forward<Child>(c), std::forward<F>(f)};
 }
 template <class Child, class F>
-then_sender<set_stopped_t, Child, F> upon_stopped(Child c, F f) {
-    return {std::move(c), std::move(f)};
+then_sender<set_stopped_t, std::decay_t<Child>, std::decay_t<F>> upon_stopped(Child&& c,
+                                                                              F&&     f) {
+    return {std::forward<Child>(c), std::forward<F>(f)};
 }
 
 // ---- let_value, let_error, let_stopped ------------------------------------
@@ -479,16 +481,19 @@ struct let_sender {
     }
 };
 template <class Child, class F>
-let_sender<set_value_t, Child, F> let_value(Child c, F f) {
-    return {std::move(c), std::move(f)};
+let_sender<set_value_t, std::decay_t<Child>, std::decay_t<F>> let_value(Child&& c,
+                                                                        F&&     f) {
+    return {std::forward<Child>(c), std::forward<F>(f)};
 }
 template <class Child, class F>
-let_sender<set_error_t, Child, F> let_error(Child c, F f) {
-    return {std::move(c), std::move(f)};
+let_sender<set_error_t, std::decay_t<Child>, std::decay_t<F>> let_error(Child&& c,
+                                                                        F&&     f) {
+    return {std::forward<Child>(c), std::forward<F>(f)};
 }
 template <class Child, class F>
-let_sender<set_stopped_t, Child, F> let_stopped(Child c, F f) {
-    return {std::move(c), std::move(f)};
+let_sender<set_stopped_t, std::decay_t<Child>, std::decay_t<F>> let_stopped(Child&& c,
+                                                                            F&&     f) {
+    return {std::forward<Child>(c), std::forward<F>(f)};
 }
 
 // ---- when_all -------------------------------------------------------------
@@ -884,8 +889,8 @@ struct when_all_sender {
     }
 };
 template <class... Ss>
-when_all_sender<Ss...> when_all(Ss... ss) {
-    return {{std::move(ss)...}};
+when_all_sender<std::decay_t<Ss>...> when_all(Ss&&... ss) {
+    return {{std::forward<Ss>(ss)...}};
 }
 
 // ---- repeat_until ---------------------------------------------------------
@@ -1024,8 +1029,8 @@ struct repeat_until_sender {
     }
 };
 template <class Child>
-repeat_until_sender<Child> repeat_until(Child c) {
-    return {std::move(c)};
+repeat_until_sender<std::decay_t<Child>> repeat_until(Child&& c) {
+    return {std::forward<Child>(c)};
 }
 
 // ---- an erased boundary ----------------------------------------------------
@@ -1194,8 +1199,8 @@ struct remote_sender {
     }
 };
 template <class Callee, class... Args>
-remote_sender<Callee, Args...> remote(Args... args) {
-    return {{args...}};
+remote_sender<Callee, std::decay_t<Args>...> remote(Args&&... args) {
+    return {{std::forward<Args>(args)...}};
 }
 
 template <class Child>
@@ -1214,8 +1219,8 @@ struct boundary_sender {
     }
 };
 template <class Child>
-boundary_sender<Child> erase_boundary(Child c) {
-    return {std::move(c)};
+boundary_sender<std::decay_t<Child>> erase_boundary(Child&& c) {
+    return {std::forward<Child>(c)};
 }
 
 // ---- a root: where the asynchronous world ends --------------------------
@@ -1419,8 +1424,9 @@ struct bulk_sender {
     }
 };
 template <class Child, class Policy, class Shape, class F>
-bulk_sender<Child, Shape, F> bulk(Child c, Policy&&, Shape shape, F f) {
-    return {std::move(c), shape, std::move(f)};
+bulk_sender<std::decay_t<Child>, Shape, std::decay_t<F>>
+bulk(Child&& c, Policy&&, Shape shape, F&& f) {
+    return {std::forward<Child>(c), shape, std::forward<F>(f)};
 }
 
 // ---- into_variant ---------------------------------------------------------
@@ -1544,8 +1550,8 @@ struct into_variant_sender {
     }
 };
 template <class Child>
-into_variant_sender<Child> into_variant(Child c) {
-    return {std::move(c)};
+into_variant_sender<std::decay_t<Child>> into_variant(Child&& c) {
+    return {std::forward<Child>(c)};
 }
 
 } // namespace th

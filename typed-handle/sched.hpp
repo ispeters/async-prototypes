@@ -146,8 +146,8 @@ struct queue_scheduler {
 };
 
 template <class Sch>
-TH_INLINE auto schedule(Sch sch) noexcept {
-    return sch.schedule();
+TH_INLINE auto schedule(Sch&& sch) noexcept {
+    return std::forward<Sch>(sch).schedule();
 }
 
 // ---- run_loop and thread_pool ---------------------------------------------
@@ -335,8 +335,9 @@ struct continues_on_sender {
     }
 };
 template <class Child, class Sch>
-continues_on_sender<Child, Sch> continues_on(Child c, Sch sch) {
-    return {std::move(c), sch};
+continues_on_sender<std::decay_t<Child>, std::decay_t<Sch>> continues_on(Child&& c,
+                                                                         Sch&&   sch) {
+    return {std::forward<Child>(c), std::forward<Sch>(sch)};
 }
 
 // ---- starts_on ------------------------------------------------------------
@@ -430,8 +431,8 @@ struct starts_on_sender {
     }
 };
 template <class Sch, class Child>
-starts_on_sender<Sch, Child> starts_on(Sch sch, Child c) {
-    return {sch, std::move(c)};
+starts_on_sender<std::decay_t<Sch>, std::decay_t<Child>> starts_on(Sch&& sch, Child&& c) {
+    return {std::forward<Sch>(sch), std::forward<Child>(c)};
 }
 
 // ---- on -------------------------------------------------------------------
@@ -462,8 +463,8 @@ struct on_sender {
     }
 };
 template <class Sch, class Child>
-on_sender<Sch, Child> on(Sch sch, Child c) {
-    return {sch, std::move(c)};
+on_sender<std::decay_t<Sch>, std::decay_t<Child>> on(Sch&& sch, Child&& c) {
+    return {std::forward<Sch>(sch), std::forward<Child>(c)};
 }
 
 // ---- sync_wait() ----------------------------------------------------------

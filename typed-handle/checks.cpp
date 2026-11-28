@@ -61,6 +61,12 @@ struct counted {
     counted(counted&&) noexcept { ++live; }
     ~counted() { --live; }
 };
+// Counts its moves, to compare the factories with stdexec's.
+struct move_counter {
+    inline static int moves = 0;
+    move_counter()          = default;
+    move_counter(move_counter&&) noexcept { ++moves; }
+};
 // Moving it throws.
 struct flaky {
     flaky() = default;
@@ -288,6 +294,21 @@ int main() {
             CHECK(st.template has<set_error_t(std::exception_ptr)>());
         });
         CHECK(counted::live == 0);
+    }
+    { // moves: a factory moves each argument once, as stdexec's do; start
+      // moves the value into the receiver's destination, where C++26 passes a
+      // reference (the deliberate difference)
+        move_counter::moves = 0;
+        auto s1             = just(move_counter());
+        CHECK(move_counter::moves == 1);
+        auto s2 = then(std::move(s1), [](move_counter&&) noexcept { return 0; });
+        CHECK(move_counter::moves == 2);
+        using Sigs = completions_of_t<decltype(s2), empty_env>;
+        root_state<Sigs> st;
+        auto             op = th::connect(std::move(s2), root_rcvr<Sigs>(&st));
+        CHECK(move_counter::moves == 3);
+        th::run(th::start(op));
+        CHECK(move_counter::moves == 4 && st.template get<int_sig>() == 0);
     }
     { // a reference completion: the next then sees the same object
         int  x   = 41;
